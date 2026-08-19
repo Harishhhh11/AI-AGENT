@@ -1,0 +1,20 @@
+@"
+# Environment files
+.env
+*.env
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+dist/
+
+# Google service account credentials
+backend/ai-reseptionist-505910-93fa26a93a57.json
+"@ | Set-Content .gitignore

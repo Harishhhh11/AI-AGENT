@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+
+  backend:
+
+    build: ./backend
+
+    container_name: ai-receptionist-backend
+
+    ports:
+
+      - "8000:8000"
+
+    env_file:
+
+      - ./backend/.env
+
+    volumes:
+
+      # The Dockerfile runs the application from /app. Mount the
+      # project there so source-code changes are visible to Uvicorn.
+      - ./backend:/app

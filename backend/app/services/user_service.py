@@ -2,7 +2,7 @@
 User service.
 
 Contains user business logic while enforcing
-organization-level isolation.
+organization-level isolation and role assignment.
 """
 
 from sqlalchemy.orm import Session
@@ -101,6 +101,64 @@ class UserService:
                 field,
                 value,
             )
+
+        return self.repository.update(user)
+
+    def assign_role(
+        self,
+        user_id: int,
+        organization_id: int,
+        role_id: int,
+    ) -> User | None:
+        """Assign an organization-owned role to an organization user."""
+
+        user = self.repository.get_by_id_in_organization(
+            user_id,
+            organization_id,
+        )
+
+        if user is None:
+            return None
+
+        role = self.repository.get_role_in_organization(
+            role_id,
+            organization_id,
+        )
+
+        if role is None:
+            raise ValueError("Role not found in this organization.")
+
+        if role not in user.roles:
+            user.roles.append(role)
+
+        return self.repository.update(user)
+
+    def remove_role(
+        self,
+        user_id: int,
+        organization_id: int,
+        role_id: int,
+    ) -> User | None:
+        """Remove an organization-owned role from an organization user."""
+
+        user = self.repository.get_by_id_in_organization(
+            user_id,
+            organization_id,
+        )
+
+        if user is None:
+            return None
+
+        role = self.repository.get_role_in_organization(
+            role_id,
+            organization_id,
+        )
+
+        if role is None:
+            raise ValueError("Role not found in this organization.")
+
+        if role in user.roles:
+            user.roles.remove(role)
 
         return self.repository.update(user)
 

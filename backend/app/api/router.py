@@ -25,6 +25,9 @@ from app.api.v1.onboarding import (
 from app.api.v1.organizations import (
     router as organization_router,
 )
+from app.api.v1.roles import (
+    router as roles_router,
+)
 from app.api.v1.users import (
     router as user_router,
 )
@@ -44,8 +47,14 @@ api_router.include_router(
     auth_router,
 )
 
+# AI receptionist / agent management
 api_router.include_router(
     agents_router,
+)
+
+# Organization roles and permissions
+api_router.include_router(
+    roles_router,
 )
 
 

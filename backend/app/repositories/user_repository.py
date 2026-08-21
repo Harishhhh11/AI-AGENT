@@ -97,3 +97,23 @@ class UserRepository(BaseRepository[User]):
         )
 
         return self.db.scalar(statement)
+
+    def add_role(
+        self,
+        user: User,
+        role: Role,
+    ) -> User:
+        if role not in user.roles:
+            user.roles.append(role)
+        self.db.flush()
+        return user
+
+    def remove_role(
+        self,
+        user: User,
+        role: Role,
+    ) -> User:
+        if role in user.roles:
+            user.roles.remove(role)
+        self.db.flush()
+        return user

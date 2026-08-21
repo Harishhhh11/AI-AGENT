@@ -33,6 +33,12 @@ class UserUpdate(BaseModel):
     is_verified: bool | None = None
 
 
+class UserRoleUpdate(BaseModel):
+    """Request to add or remove an organization role."""
+
+    role_id: int
+
+
 class UserResponse(UserBase):
 
     model_config = ConfigDict(
@@ -47,6 +53,8 @@ class UserResponse(UserBase):
     is_active: bool
     is_verified: bool
     is_superuser: bool
+
+    role_ids: list[int] = []
 
     created_at: datetime
     updated_at: datetime

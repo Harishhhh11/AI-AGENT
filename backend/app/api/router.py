@@ -19,6 +19,9 @@ from app.api.v1.knowledge import (
 from app.api.v1.leads import (
     router as leads_router,
 )
+from app.api.v1.onboarding import (
+    router as onboarding_router,
+)
 from app.api.v1.organizations import (
     router as organization_router,
 )
@@ -28,6 +31,12 @@ from app.api.v1.users import (
 
 
 api_router = APIRouter()
+
+
+# Public onboarding
+api_router.include_router(
+    onboarding_router,
+)
 
 
 # Authentication

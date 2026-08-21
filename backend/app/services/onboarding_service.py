@@ -2,6 +2,7 @@
 
 from sqlalchemy.orm import Session
 
+from app.auth.bootstrap import bootstrap_organization_admin
 from app.auth.hashing import hash_password
 from app.models.agent import Agent
 from app.models.organization import Organization
@@ -21,10 +22,16 @@ class OnboardingService:
         self.users = UserRepository(db)
         self.agents = AgentRepository(db)
 
-    def onboard(self, data: OnboardingRequest) -> tuple[Organization, User, Agent]:
+    def onboard(
+        self,
+        data: OnboardingRequest,
+    ) -> tuple[Organization, User, Agent]:
+        """Provision a new tenant and its initial receptionist in one transaction."""
+
         organization_name = data.organization_name.strip()
         organization_email = str(data.organization_email).lower()
         admin_email = str(data.admin_email).lower()
+        public_slug = data.public_slug.strip().lower()
 
         if self.organizations.get_by_name(organization_name):
             raise ValueError("An organization with this name already exists.")
@@ -35,7 +42,6 @@ class OnboardingService:
         if self.users.get_by_email(admin_email):
             raise ValueError("A user with this email already exists.")
 
-        public_slug = data.public_slug.strip().lower()
         if self.agents.get_by_slug(public_slug):
             raise ValueError("That public agent URL is already in use.")
 
@@ -55,9 +61,15 @@ class OnboardingService:
                 phone=data.phone.strip() if data.phone else None,
                 password_hash=hash_password(data.password),
                 is_verified=False,
-                is_superuser=True,
+                is_superuser=False,
             )
             self.db.add(admin)
+            self.db.flush()
+
+            bootstrap_organization_admin(
+                self.db,
+                admin,
+            )
 
             agent = Agent(
                 organization_id=organization.id,

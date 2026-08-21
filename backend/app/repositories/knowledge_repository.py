@@ -23,18 +23,8 @@ class KnowledgeRepository(BaseRepository[KnowledgeBase]):
             model=KnowledgeBase,
         )
 
-    def get_by_id(
-        self,
-        knowledge_id: int,
-    ) -> KnowledgeBase | None:
-
-        statement = (
-            select(KnowledgeBase)
-            .where(
-                KnowledgeBase.id == knowledge_id
-            )
-        )
-
+    def get_by_id(self, knowledge_id: int) -> KnowledgeBase | None:
+        statement = select(KnowledgeBase).where(KnowledgeBase.id == knowledge_id)
         return self.db.scalar(statement)
 
     def get_by_id_in_organization(
@@ -42,94 +32,77 @@ class KnowledgeRepository(BaseRepository[KnowledgeBase]):
         knowledge_id: int,
         organization_id: int,
     ) -> KnowledgeBase | None:
-
         statement = (
             select(KnowledgeBase)
-            .where(
-                KnowledgeBase.id == knowledge_id
-            )
-            .where(
-                KnowledgeBase.organization_id
-                == organization_id
-            )
+            .where(KnowledgeBase.id == knowledge_id)
+            .where(KnowledgeBase.organization_id == organization_id)
         )
-
         return self.db.scalar(statement)
 
-    def get_all(
-        self,
-        organization_id: int,
-    ) -> list[KnowledgeBase]:
-
+    def get_all(self, organization_id: int) -> list[KnowledgeBase]:
         statement = (
             select(KnowledgeBase)
-            .where(
-                KnowledgeBase.organization_id
-                == organization_id
-            )
-            .order_by(
-                KnowledgeBase.id.desc()
-            )
+            .where(KnowledgeBase.organization_id == organization_id)
+            .order_by(KnowledgeBase.id.desc())
         )
+        return list(self.db.scalars(statement).all())
 
-        return list(
-            self.db.scalars(
-                statement
-            ).all()
-        )
+    def get_all_by_organization(self, organization_id: int) -> list[KnowledgeBase]:
+        return self.get_all(organization_id)
 
-    def get_all_by_organization(
+    def get_all_in_agent(
         self,
         organization_id: int,
+        agent_id: int,
     ) -> list[KnowledgeBase]:
-
-        return self.get_all(
-            organization_id
+        """Return active knowledge assigned to one tenant's agent."""
+        statement = (
+            select(KnowledgeBase)
+            .where(KnowledgeBase.organization_id == organization_id)
+            .where(KnowledgeBase.agent_id == agent_id)
+            .where(KnowledgeBase.is_active.is_(True))
+            .order_by(KnowledgeBase.id.desc())
         )
+        return list(self.db.scalars(statement).all())
 
     def search(
         self,
         organization_id: int,
         query_embedding: list[float],
         limit: int = 5,
+        agent_id: int | None = None,
     ) -> list[tuple[KnowledgeBase, float]]:
         """
         Semantic search using pgvector.
+
+        Tenant isolation is mandatory.  When an agent is supplied,
+        only that agent's knowledge and organization-wide knowledge
+        (agent_id IS NULL) are eligible.
         """
 
-        distance = (
-            KnowledgeBase.embedding.cosine_distance(
-                query_embedding
-            )
-        )
+        distance = KnowledgeBase.embedding.cosine_distance(query_embedding)
 
         statement = (
             select(
                 KnowledgeBase,
                 distance.label("distance"),
             )
-            .where(
-                KnowledgeBase.organization_id
-                == organization_id
-            )
-            .where(
-                KnowledgeBase.embedding.is_not(None)
-            )
-            .where(
-                KnowledgeBase.is_active.is_(True)
-            )
-            .order_by(distance)
-            .limit(limit)
+            .where(KnowledgeBase.organization_id == organization_id)
+            .where(KnowledgeBase.embedding.is_not(None))
+            .where(KnowledgeBase.is_active.is_(True))
         )
 
-        rows = self.db.execute(
-            statement
-        ).all()
+        if agent_id is not None:
+            statement = statement.where(
+                (KnowledgeBase.agent_id == agent_id)
+                | (KnowledgeBase.agent_id.is_(None))
+            )
+
+        statement = statement.order_by(distance).limit(limit)
+
+        rows = self.db.execute(statement).all()
 
         return [
-            (
-                knowledge,
-                float(distance_value),
-            )
+            (knowledge, float(distance_value))
             for knowledge, distance_value in rows
         ]

@@ -18,6 +18,9 @@ class FakeSession:
     def add(self, obj):
         self.objects.append(obj)
 
+    def scalar(self, _statement):
+        return None
+
     def flush(self):
         self.flushed = True
         next_id = 1

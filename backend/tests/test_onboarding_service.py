@@ -18,6 +18,9 @@ class FakeSession:
     def add(self, obj):
         self.objects.append(obj)
 
+    def scalar(self, _statement):
+        return None
+
     def flush(self):
         self.flushed = True
         next_id = 1
@@ -101,6 +104,7 @@ def test_onboarding_rejects_existing_admin_email():
 
 def test_onboarding_rejects_existing_public_slug():
     service, _db = build_service()
+    service.agents.get_by_slug.return_value = None
     service.agents.get_by_slug.return_value = object()
 
     with pytest.raises(ValueError, match="public agent URL is already in use"):

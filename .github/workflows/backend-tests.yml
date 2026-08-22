@@ -25,12 +25,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-test.txt
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
 
       - name: Install test dependencies
-        run: pip install -r requirements-test.txt
+        run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
 
       - name: Run tests
         env:

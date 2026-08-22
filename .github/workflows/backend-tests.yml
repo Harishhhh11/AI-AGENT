@@ -10,7 +10,7 @@ on:
       - main
 
 jobs:
-  backend-tests:
+  phase2-foundations:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,8 +24,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
 
       - name: Install runtime dependencies
         run: pip install -r requirements.txt
@@ -33,7 +31,35 @@ jobs:
       - name: Install test dependencies
         run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
 
-      - name: Run tests
+      - name: Run Phase 2 foundation tests
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-test-secret-key-not-for-production
+        run: pytest -q tests/test_phase2_foundations.py
+
+  full-suite-baseline:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install test dependencies
+        run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
+
+      - name: Run full regression suite
         env:
           PYTHONPATH: .
           DATABASE_URL: sqlite:///./ci_test.db

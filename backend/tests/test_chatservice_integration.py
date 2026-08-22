@@ -17,7 +17,7 @@ def test_chat_service_initializes_phase2_services() -> None:
         patch("app.services.chat_service.ToolOrchestrator"):
         service = ChatService(db)
 
-    assert service.subject_service.__class__.__name__ == "ConversationSubjectService"
+    assert service.conversation_subject_service.__class__.__name__ == "ConversationSubjectService"
     assert service.response_policy_service.__class__.__name__ == "ResponsePolicyService"
     assert service.relevance_service.__class__.__name__ == "RelevanceService"
     assert service.grounding_service.__class__.__name__ == "GroundingService"

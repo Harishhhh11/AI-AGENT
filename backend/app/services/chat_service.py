@@ -1279,6 +1279,16 @@ class ChatService:
                 if value:
                     lead_context.interest = value
 
+        # Preserve the first explicit lead-intent message as interest when
+        # no later field-specific interest answer has supplied it. This makes
+        # lead reconstruction robust even when the initial intent was not
+        # preceded by an assistant interest question.
+        if not lead_context.interest:
+            for role, customer_text in normalized:
+                if role == "user" and cls._detect_lead_intent(customer_text):
+                    lead_context.interest = customer_text
+                    break
+
         if any(
             (
                 lead_context.name,
@@ -1291,6 +1301,51 @@ class ChatService:
             )
         ):
             lead_context.is_lead = True
+
+    @staticmethod
+    def _detect_lead_intent(text: str) -> bool:
+        normalized = " ".join(
+            (text or "").strip().lower().split()
+        )
+        if not normalized:
+            return False
+        phrases = (
+            "i want to join",
+            "i want to enroll",
+            "i want to register",
+            "i would like to join",
+            "i would like to enroll",
+            "i would like to register",
+            "i want admission",
+            "i need admission",
+            "i am interested",
+            "i'm interested",
+            "im interested",
+            "i want to buy",
+            "i would like to buy",
+            "i want to purchase",
+            "i would like to purchase",
+            "i want to book",
+            "i would like to book",
+            "i want a demo",
+            "i would like a demo",
+            "schedule a demo",
+            "book a demo",
+            "contact me",
+            "call me",
+            "please call me",
+            "i need a callback",
+            "call me back",
+            "how can i register",
+            "how can i join",
+            "how do i join",
+            "how do i register",
+            "how do i enroll",
+            "i want to sign up",
+            "i would like to sign up",
+            "sign me up",
+        )
+        return any(phrase in normalized for phrase in phrases)
 
     @staticmethod
     def _field_from_lead_question(
@@ -2936,7 +2991,9 @@ Do not repeat the same fact in different ways.
         else:
 
             shortened = (
-                shortened.rstrip()
+                shortened[
+                    : max(0, maximum - 3)
+                ].rstrip()
                 + "..."
             )
 

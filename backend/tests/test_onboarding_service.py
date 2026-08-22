@@ -77,7 +77,7 @@ def test_onboarding_creates_organization_admin_and_agent():
     assert organization.name == "Acme Technologies"
     assert admin.organization_id == organization.id
     assert admin.email == "jane@acme.example"
-    assert admin.is_superuser is True
+    assert admin.is_superuser is False
     assert agent.organization_id == organization.id
     assert agent.public_slug == "acme-receptionist"
     assert agent.is_published is False

@@ -1,0 +1,10 @@
+-r requirements.txt
+
+psycopg[binary]
+pgvector
+pwdlib[argon2]
+pytest-asyncio
+python-docx
+pypdf
+sentence-transformers
+email-validator

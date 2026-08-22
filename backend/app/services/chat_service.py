@@ -71,6 +71,22 @@ from app.services.lead_context_service import (
     LeadContextService,
 )
 
+from app.services.conversation_subject_service import (
+    ConversationSubjectService,
+)
+
+from app.services.response_policy_service import (
+    ResponsePolicyService,
+)
+
+from app.services.relevance_service import (
+    RelevanceService,
+)
+
+from app.services.grounding_service import (
+    GroundingService,
+)
+
 from app.tools.base import ToolContext
 
 from app.tools.registry import ToolOrchestrator
@@ -176,6 +192,28 @@ class ChatService:
                 message_limit=(
                     self.CONVERSATION_HISTORY_LIMIT
                 )
+            )
+        )
+
+        # -----------------------------------------------------
+        # Phase 2 conversation intelligence
+        # -----------------------------------------------------
+
+        self.conversation_subject_service = (
+            ConversationSubjectService()
+        )
+
+        self.response_policy_service = (
+            ResponsePolicyService()
+        )
+
+        self.relevance_service = (
+            RelevanceService()
+        )
+
+        self.grounding_service = (
+            GroundingService(
+                relevance_service=self.relevance_service
             )
         )
 
@@ -359,6 +397,48 @@ class ChatService:
             )
             or ""
         ).strip()
+
+        # =====================================================
+        # 5A. PHASE 2 SUBJECT RESOLUTION
+        # =====================================================
+
+        subject_resolution = (
+            self.conversation_subject_service.resolve(
+                message=message,
+                intent=intent,
+                previous_messages=previous_messages,
+                previous_subject=previous_subject,
+            )
+        )
+
+        if subject_resolution.current_subject:
+            current_subject = (
+                subject_resolution.current_subject
+            )
+
+        explicit_subject = (
+            subject_resolution.explicit_subject
+        )
+
+        previous_subject = (
+            subject_resolution.previous_subject
+        )
+
+        # =====================================================
+        # 5B. PHASE 2 RESPONSE POLICY
+        # =====================================================
+
+        response_plan = (
+            self.response_policy_service.plan(
+                message=message,
+                intent=intent,
+                question_count=question_count,
+                requires_knowledge=requires_knowledge,
+            )
+        )
+
+        response_style = response_plan.style
+        question_count = response_plan.question_count
 
         # =====================================================
         # 6. BUILD CONVERSATION CONTEXT
@@ -579,7 +659,7 @@ class ChatService:
                 response = (
                     self._apply_response_length_guard(
                         response=response,
-                        response_style="short",
+                        response_style=response_style,
                     )
                 )
 
@@ -623,7 +703,7 @@ class ChatService:
                 response = (
                     self._apply_response_length_guard(
                         response=response,
-                        response_style="short",
+                        response_style=response_style,
                     )
                 )
 
@@ -756,6 +836,23 @@ class ChatService:
                 )
 
                 knowledge_items = []
+
+        # =====================================================
+        # 12A. PHASE 2 RELEVANCE/GROUNDING
+        # =====================================================
+
+        if requires_knowledge and knowledge_items:
+            grounded_items = []
+            for item in knowledge_items:
+                decision = self.grounding_service.evaluate(
+                    query=retrieval_query or message,
+                    title=str(getattr(item, "title", "") or ""),
+                    content=str(getattr(item, "content", "") or ""),
+                    semantic_distance=getattr(item, "semantic_distance", None),
+                )
+                if decision.accepted:
+                    grounded_items.append(item)
+            knowledge_items = grounded_items
 
         # =====================================================
         # 13. VERIFIED KNOWLEDGE CONTEXT

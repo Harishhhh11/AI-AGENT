@@ -30,7 +30,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install test dependencies
+        run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
+
       - name: Run tests
         env:
           PYTHONPATH: .
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-test-secret-key-not-for-production
         run: pytest -q

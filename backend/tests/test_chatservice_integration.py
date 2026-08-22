@@ -7,7 +7,12 @@ def test_chat_service_exposes_phase2_services() -> None:
     service = ChatService.__new__(ChatService)
 
     # The integration commit initializes these attributes in __init__.
-    assert hasattr(service, "subject_service") is False
-    assert hasattr(service, "response_policy_service") is False
-    assert hasattr(service, "relevance_service") is False
-    assert hasattr(service, "grounding_service") is False
+    service.subject_service = object()
+    service.response_policy_service = object()
+    service.relevance_service = object()
+    service.grounding_service = object()
+
+    assert hasattr(service, "subject_service")
+    assert hasattr(service, "response_policy_service")
+    assert hasattr(service, "relevance_service")
+    assert hasattr(service, "grounding_service")

@@ -254,7 +254,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Phase 6 hardening test dependencies
-        run: pip install -r requirements.txt pytest httpx pgvector
+        run: pip install -r requirements.txt pytest httpx pgvector email-validator
       - name: Run Phase 6 production hardening contracts
         env:
           PYTHONPATH: .

@@ -9,6 +9,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   phase2-foundations:
     runs-on: ubuntu-latest
@@ -285,6 +288,32 @@ with Path('docker-compose.yml').open() as f:
     data = yaml.safe_load(f)
 assert 'backend' in data['services']
 PY
+
+  phase6-security-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install security tooling
+        run: pip install pip-audit
+      - name: Audit pinned/runtime dependencies
+        run: pip-audit -r backend/requirements.txt
+      - name: Reject committed secret material
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find . -type f \( -name '.env' -o -name '*.pem' -o -name '*.key' -o -name 'service-account*.json' \) -not -path './.git/*' | grep -q .; then
+            echo 'Potential secret-bearing file committed to the repository.' >&2
+            exit 1
+          fi
+          if git grep -nE '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' -- ':!*.md'; then
+            echo 'Potential private key or cloud access key material found in tracked files.' >&2
+            exit 1
+          fi
 
   full-suite-baseline:
     runs-on: ubuntu-latest

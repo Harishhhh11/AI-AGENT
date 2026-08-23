@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
-from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -54,10 +53,8 @@ app.include_router(api_router, prefix="/api/v1")
 @app.get("/")
 def root():
     return {
-        "message": settings.APP_NAME,
-        "version": settings.APP_VERSION,
+        "message": "AI Receptionist Platform API",
         "status": "running",
-        "environment": settings.ENVIRONMENT,
     }
 
 
@@ -73,7 +70,7 @@ def ready():
     db = SessionLocal()
     try:
         db.execute(text("SELECT 1"))
-    except Exception as exc:
+    except Exception:
         return JSONResponse(
             status_code=503,
             content={"status": "not_ready", "dependencies": {"database": "unavailable"}},

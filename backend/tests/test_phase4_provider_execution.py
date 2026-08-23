@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.business_action_service import BusinessActionService
 from app.services.provider_execution_service import ProviderExecutionService
 
@@ -19,6 +21,7 @@ class FailingProvider(FakeFollowUpProvider):
         raise RuntimeError("provider unavailable")
 
 
+@pytest.mark.asyncio
 async def test_unconfigured_provider_is_blocked_safely():
     service = ProviderExecutionService()
     action = BusinessActionService().build_action(
@@ -35,6 +38,7 @@ async def test_unconfigured_provider_is_blocked_safely():
     assert result.action.status == "failed"
 
 
+@pytest.mark.asyncio
 async def test_configured_provider_executes_and_marks_completed():
     service = ProviderExecutionService(providers=[FakeFollowUpProvider()])
     action = BusinessActionService().build_action(
@@ -52,6 +56,7 @@ async def test_configured_provider_executes_and_marks_completed():
     assert result.action.payload["provider_result"] == "queued"
 
 
+@pytest.mark.asyncio
 async def test_provider_failure_is_structured():
     service = ProviderExecutionService(providers=[FailingProvider()])
     action = BusinessActionService().build_action(

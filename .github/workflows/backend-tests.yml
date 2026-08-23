@@ -122,9 +122,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install Phase 4 test dependencies
@@ -143,9 +143,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install Phase 4 CRM test dependencies
@@ -164,9 +164,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install Phase 4 provider test dependencies
@@ -185,9 +185,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install Phase 5 channel test dependencies
@@ -227,9 +227,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install Phase 5 integration test dependencies
@@ -254,7 +254,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Phase 6 hardening test dependencies
-        run: pip install -r requirements.txt pytest httpx pgvector email-validator "pwdlib[argon2]" sentence-transformers
+        run: pip install -r requirements.txt pytest httpx pgvector email-validator "pwdlib[argon2]" sentence-transformers python-docx pypdf
       - name: Run Phase 6 production hardening contracts
         env:
           PYTHONPATH: .
@@ -271,9 +271,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install runtime dependencies

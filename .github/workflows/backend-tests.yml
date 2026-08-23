@@ -60,6 +60,31 @@ jobs:
           SECRET_KEY: ci-test-secret-key-not-for-production
         run: pytest -q tests/test_chatservice_integration.py
 
+  phase3-tool-execution:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tool execution test dependencies
+        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
+
+      - name: Run Phase 3 tool execution contracts
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-test-secret-key-not-for-production
+        run: pytest -q tests/test_phase3_tool_execution.py
+
   full-suite-baseline:
     runs-on: ubuntu-latest
     defaults:

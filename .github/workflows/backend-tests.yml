@@ -185,6 +185,31 @@ jobs:
           SECRET_KEY: ci-test-secret-key-not-for-production
         run: pytest -q tests/test_phase4_crm_integrations.py
 
+  phase4-provider-execution:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Phase 4 provider test dependencies
+        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
+
+      - name: Run Phase 4 provider execution contracts
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-test-secret-key-not-for-production
+        run: pytest -q tests/test_phase4_provider_execution.py
+
   full-suite-baseline:
     runs-on: ubuntu-latest
     defaults:

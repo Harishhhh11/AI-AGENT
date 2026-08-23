@@ -48,7 +48,7 @@ def test_follow_up_inherits_previous_subject() -> None:
 def test_relevance_rejects_unrelated_knowledge() -> None:
     service = RelevanceService()
 
-    decision = service.evaluate(
+    decision = service.score(
         query="python course fee",
         title="Company address",
         content="Nawabpet, Nellore",

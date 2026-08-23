@@ -17,9 +17,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install runtime dependencies needed by foundation tests
@@ -38,9 +38,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install integration-test dependencies
@@ -59,9 +59,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install tool execution test dependencies
@@ -80,9 +80,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install recovery test dependencies
@@ -101,9 +101,9 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install final validation dependencies
@@ -263,6 +263,28 @@ jobs:
           ENVIRONMENT: development
           DEBUG: 'false'
         run: pytest -q tests/test_phase6_production_hardening.py
+
+  phase6-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install deployment contract dependencies
+        run: pip install pytest pyyaml
+      - name: Run deployment contracts
+        run: pytest -q backend/tests/test_phase6_deployment.py
+      - name: Validate compose syntax
+        run: python - <<'PY'
+import yaml
+from pathlib import Path
+with Path('docker-compose.yml').open() as f:
+    data = yaml.safe_load(f)
+assert 'backend' in data['services']
+PY
 
   full-suite-baseline:
     runs-on: ubuntu-latest

@@ -15,19 +15,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install runtime dependencies needed by foundation tests
         run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest
-
       - name: Run Phase 2 foundation tests
         env:
           PYTHONPATH: .
@@ -40,19 +36,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install integration-test dependencies
         run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest httpx pgvector sentence-transformers
-
       - name: Run ChatService integration tests
         env:
           PYTHONPATH: .
@@ -65,19 +57,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install tool execution test dependencies
         run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-
       - name: Run Phase 3 tool execution contracts
         env:
           PYTHONPATH: .
@@ -90,19 +78,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install recovery test dependencies
         run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-
       - name: Run Phase 3 recovery and multistep contracts
         env:
           PYTHONPATH: .
@@ -115,19 +99,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install final validation dependencies
         run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-
       - name: Run Phase 3 final orchestration validation
         env:
           PYTHONPATH: .
@@ -140,19 +120,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install Phase 4 test dependencies
         run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-
       - name: Run Phase 4 business automation contracts
         env:
           PYTHONPATH: .
@@ -165,19 +141,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install Phase 4 CRM test dependencies
         run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-
       - name: Run Phase 4 CRM integration contracts
         env:
           PYTHONPATH: .
@@ -190,19 +162,15 @@ jobs:
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install Phase 4 provider test dependencies
         run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-
       - name: Run Phase 4 provider execution contracts
         env:
           PYTHONPATH: .
@@ -210,27 +178,43 @@ jobs:
           SECRET_KEY: ci-test-secret-key-not-for-production
         run: pytest -q tests/test_phase4_provider_execution.py
 
+  phase5-channels:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Phase 5 channel test dependencies
+        run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest
+      - name: Run Phase 5 channel contracts
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-test-secret-key-not-for-production
+        run: pytest -q tests/test_phase5_channels.py
+
   full-suite-baseline:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install runtime dependencies
         run: pip install -r requirements.txt
-
       - name: Install test dependencies
         run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
-
       - name: Run full regression suite
         env:
           PYTHONPATH: .

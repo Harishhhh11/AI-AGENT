@@ -10,6 +10,10 @@ services:
       - ./backend/.env
     environment:
       RUN_MIGRATIONS: "true"
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql+psycopg://postgres:postgres@host.docker.internal:5433/ai_receptionist}
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).read()"]
       interval: 30s

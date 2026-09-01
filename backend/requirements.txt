@@ -5,6 +5,7 @@ pydantic-settings
 
 sqlalchemy
 alembic
+psycopg[binary]
 
 python-dotenv
 

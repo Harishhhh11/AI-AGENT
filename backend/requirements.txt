@@ -26,6 +26,9 @@ ollama
 
 httpx
 
+# Semantic embeddings
+sentence-transformers
+
 pytest
 
 google-api-python-client

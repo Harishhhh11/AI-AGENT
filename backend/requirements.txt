@@ -12,6 +12,7 @@ pgvector
 python-dotenv
 
 passlib[bcrypt]
+pwdlib[argon2]
 
 python-jose[cryptography]
 

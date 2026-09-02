@@ -29,7 +29,14 @@ httpx
 # Semantic embeddings
 sentence-transformers
 
-pytest
+# Document processing
+python-docx
+pypdf
 
+# Testing
+pytest
+pytest-asyncio
+
+# Google integrations
 google-api-python-client
 google-auth

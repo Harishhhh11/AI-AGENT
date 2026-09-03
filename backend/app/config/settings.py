@@ -12,7 +12,7 @@ _PLACEHOLDER_SECRET = "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_KEY"
 
 
 class Settings(BaseSettings):
-    """Runtime configuration with explicit production safety checks."""
+    """Runtime configuration with explicit provider settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -25,8 +25,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
-
-    HOST: str = "0.0.0.0"
+    HOST: str = "127.0.0.1"
     PORT: int = 8000
 
     DATABASE_URL: str = Field(
@@ -38,8 +37,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    OLLAMA_HOST: str = "http://localhost:11434"
+    # Local LLM defaults.
+    LLM_PROVIDER: str = "ollama"
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    OLLAMA_HOST: str = "http://127.0.0.1:11434"
     MODEL_NAME: str = "qwen2.5:3b"
+    OPENAI_API_KEY: str = ""
+    LLM_BASE_URL: str = ""
 
     GOOGLE_SHEET_NAME: str = "AI Receptionist Leads"
     GOOGLE_SHEETS_ENABLED: bool = False
@@ -54,15 +58,25 @@ class Settings(BaseSettings):
     CRM_STAGE: str = "new"
     CRM_TIMEOUT_SECONDS: int = 10
 
-    # Comma-separated frontend origins allowed to call the API.
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
-
     SECURE_HEADERS_ENABLED: bool = True
     ACCESS_LOG_ENABLED: bool = True
 
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def llm_provider(self) -> str:
+        return (self.LLM_PROVIDER or "ollama").strip().lower()
+
+    @property
+    def ollama_base_url(self) -> str:
+        return (
+            self.OLLAMA_BASE_URL
+            or self.OLLAMA_HOST
+            or "http://127.0.0.1:11434"
+        ).rstrip("/")
 
     @field_validator("ENVIRONMENT")
     @classmethod

@@ -85,6 +85,7 @@ class LeadContextService:
         r"\bcall\s+me\s+([A-Za-z][A-Za-z .'-]{1,80})",
     )
 
+    # Words that commonly follow "I am ..." but are clearly not names.
     NON_NAME_PREFIXES = (
         "interested", "looking", "trying", "planning", "seeking", "calling",
         "enquiring", "inquiring", "contacting", "joining", "enrolling",
@@ -118,9 +119,8 @@ class LeadContextService:
             if role == "user":
                 if self.detect_lead_intent(content):
                     context.is_lead = True
-                    # Lead intent is not automatically the interest.
-                    # Example: "I am interested in joining your services"
-                    # should still ask which actual product/service is wanted.
+                    # Lead intent alone is not an actual product/service interest.
+                    # Keep generic intent phrases out of the interest field.
                     detected_interest = self.extract_interest_from_intent(content)
                     if detected_interest and not context.interest:
                         context.interest = detected_interest

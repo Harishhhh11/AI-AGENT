@@ -31,80 +31,39 @@ class OllamaService(BaseLLM):
     services and prompts.
     """
 
-    # =========================================================
-    # NORMAL RESPONSE SETTINGS
-    # =========================================================
-
     DEFAULT_TEMPERATURE = 0.25
-
     DEFAULT_TOP_P = 0.9
-
     DEFAULT_TOP_K = 40
-
     DEFAULT_NUM_PREDICT = 180
 
-    # =========================================================
-    # STRUCTURED RESPONSE SETTINGS
-    # =========================================================
-
     STRUCTURED_TEMPERATURE = 0.0
-
     STRUCTURED_TOP_P = 0.8
-
     STRUCTURED_TOP_K = 30
-
     STRUCTURED_NUM_PREDICT = 300
 
-    # =========================================================
-    # TIMEOUT
-    # =========================================================
-
     REQUEST_TIMEOUT = 120.0
-
-    # =========================================================
-    # INITIALIZATION
-    # =========================================================
 
     def __init__(
         self,
         host: str | None = None,
         model: str | None = None,
     ) -> None:
-
+        # IMPORTANT: use the canonical Ollama URL from config.
+        # OLLAMA_BASE_URL is the primary setting, while
+        # OLLAMA_HOST remains supported as a fallback.
+        # This prevents local Python from accidentally using the
+        # Docker-only host.docker.internal address.
         self.host = (
-            host
-            or settings.OLLAMA_HOST
+            host or settings.ollama_base_url
         ).rstrip("/")
 
-        self.model = (
-            model
-            or settings.MODEL_NAME
-        )
+        self.model = model or settings.MODEL_NAME
 
-    # =========================================================
-    # NORMAL GENERATION
-    # =========================================================
-
-    async def generate(
-        self,
-        prompt: str,
-    ) -> str:
-        """
-        Generate normal customer-facing text.
-
-        This method is used by the receptionist.
-
-        It intentionally contains customer-facing rules.
-
-        Do NOT use this method for JSON extraction.
-        """
-
-        prompt = (
-            prompt or ""
-        ).strip()
+    async def generate(self, prompt: str) -> str:
+        """Generate normal customer-facing text."""
+        prompt = (prompt or "").strip()
 
         if not prompt:
-
             return ""
 
         final_prompt = f"""
@@ -118,21 +77,13 @@ Return ONLY the final answer to the customer's CURRENT
 MESSAGE.
 
 Do not repeat the customer's question.
-
 Do not rewrite or paraphrase the customer's question.
-
 Do not ask the customer's question back.
-
 Do not output analysis.
-
 Do not output reasoning.
-
 Do not output instructions.
-
 Do not output JSON.
-
 Do not output labels such as:
-
 AI:
 Assistant:
 Answer:
@@ -157,66 +108,22 @@ FINAL CUSTOMER-FACING ANSWER:
             "prompt": final_prompt,
             "stream": False,
             "options": {
-                "temperature": (
-                    self.DEFAULT_TEMPERATURE
-                ),
-                "top_p": (
-                    self.DEFAULT_TOP_P
-                ),
-                "top_k": (
-                    self.DEFAULT_TOP_K
-                ),
-                "num_predict": (
-                    self.DEFAULT_NUM_PREDICT
-                ),
+                "temperature": self.DEFAULT_TEMPERATURE,
+                "top_p": self.DEFAULT_TOP_P,
+                "top_k": self.DEFAULT_TOP_K,
+                "num_predict": self.DEFAULT_NUM_PREDICT,
             },
         }
 
-        data = await self._request(
-            payload
-        )
+        data = await self._request(payload)
+        generated = str(data.get("response", "") or "").strip()
+        return self._clean_response(generated)
 
-        generated = data.get(
-            "response",
-            "",
-        )
-
-        generated = str(
-            generated or ""
-        ).strip()
-
-        return self._clean_response(
-            generated
-        )
-
-    # =========================================================
-    # STRUCTURED GENERATION
-    # =========================================================
-
-    async def generate_structured(
-        self,
-        prompt: str,
-    ) -> str:
-        """
-        Generate structured internal output.
-
-        This method is intentionally separate from generate().
-
-        It does NOT append customer-facing instructions.
-
-        Used for:
-
-        - Lead extraction
-        - Structured classification
-        - Internal JSON extraction
-        """
-
-        prompt = (
-            prompt or ""
-        ).strip()
+    async def generate_structured(self, prompt: str) -> str:
+        """Generate structured internal output."""
+        prompt = (prompt or "").strip()
 
         if not prompt:
-
             return "{}"
 
         structured_prompt = f"""
@@ -229,19 +136,13 @@ STRUCTURED OUTPUT RULE
 Return ONLY valid JSON.
 
 Do not output markdown.
-
 Do not output ```json.
-
 Do not output ```.
-
 Do not output explanations.
-
 Do not output reasoning.
-
 Do not output conversational text.
 
 The first character of your response must be {{.
-
 The last character of your response must be }}.
 """.strip()
 
@@ -251,95 +152,37 @@ The last character of your response must be }}.
             "stream": False,
             "format": "json",
             "options": {
-                "temperature": (
-                    self.STRUCTURED_TEMPERATURE
-                ),
-                "top_p": (
-                    self.STRUCTURED_TOP_P
-                ),
-                "top_k": (
-                    self.STRUCTURED_TOP_K
-                ),
-                "num_predict": (
-                    self.STRUCTURED_NUM_PREDICT
-                ),
+                "temperature": self.STRUCTURED_TEMPERATURE,
+                "top_p": self.STRUCTURED_TOP_P,
+                "top_k": self.STRUCTURED_TOP_K,
+                "num_predict": self.STRUCTURED_NUM_PREDICT,
             },
         }
 
         try:
-
-            data = await self._request(
-                payload
-            )
-
+            data = await self._request(payload)
         except Exception:
+            payload.pop("format", None)
+            data = await self._request(payload)
 
-            # Some Ollama versions/models may not accept
-            # "format": "json".
-            #
-            # Retry without the format parameter.
+        generated = data.get("response", "{}")
+        return str(generated or "{}").strip()
 
-            payload.pop(
-                "format",
-                None,
-            )
+    async def _request(self, payload: dict) -> dict:
+        """Send a request to the configured Ollama server."""
+        url = f"{self.host}/api/generate"
 
-            data = await self._request(
-                payload
-            )
-
-        generated = data.get(
-            "response",
-            "{}",
-        )
-
-        return str(
-            generated or "{}"
-        ).strip()
-
-    # =========================================================
-    # HTTP REQUEST
-    # =========================================================
-
-    async def _request(
-        self,
-        payload: dict,
-    ) -> dict:
-        """
-        Send request to Ollama.
-        """
-
-        async with httpx.AsyncClient(
-            timeout=self.REQUEST_TIMEOUT
-        ) as client:
-
-            response = await client.post(
-                f"{self.host}/api/generate",
-                json=payload,
-            )
-
+        async with httpx.AsyncClient(timeout=self.REQUEST_TIMEOUT) as client:
+            response = await client.post(url, json=payload)
             response.raise_for_status()
-
             return response.json()
 
-    # =========================================================
-    # NORMAL RESPONSE CLEANUP
-    # =========================================================
-
     @staticmethod
-    def _clean_response(
-        response: str,
-    ) -> str:
-        """
-        Clean common customer-facing model artifacts.
-        """
-
-        response = (
-            response or ""
-        ).strip()
+    def _clean_response(response: str) -> str:
+        """Clean common customer-facing model artifacts."""
+        response = (response or "").strip()
 
         if not response:
-
             return ""
 
         prefixes = (
@@ -353,42 +196,22 @@ The last character of your response must be }}.
         )
 
         changed = True
-
         while changed:
-
             changed = False
-
             for prefix in prefixes:
-
-                if response.startswith(
-                    prefix
-                ):
-
-                    response = (
-                        response[
-                            len(prefix):
-                        ]
-                        .strip()
-                    )
-
+                if response.startswith(prefix):
+                    response = response[len(prefix):].strip()
                     changed = True
 
         response = (
             response
-            .replace(
-                "```text",
-                "",
-            )
-            .replace(
-                "```",
-                "",
-            )
+            .replace("```text", "")
+            .replace("```", "")
             .strip()
         )
 
         response = re.sub(
-            r"^(final answer|final response)"
-            r"\s*:\s*",
+            r"^(final answer|final response)\s*:\s*",
             "",
             response,
             flags=re.IGNORECASE,
@@ -396,90 +219,33 @@ The last character of your response must be }}.
 
         return response.strip()
 
-    # =========================================================
-    # STRUCTURED RESPONSE CLEANUP
-    # =========================================================
-
     @staticmethod
-    def clean_structured_response(
-        response: str,
-    ) -> str:
-        """
-        Extract the JSON object from a model response.
-
-        This is useful if the model accidentally adds a small
-        amount of surrounding text despite the JSON constraint.
-        """
-
-        response = (
-            response or ""
-        ).strip()
+    def clean_structured_response(response: str) -> str:
+        """Extract the JSON object from a model response."""
+        response = (response or "").strip()
 
         if not response:
-
             return "{}"
-
-        # -----------------------------------------------------
-        # Remove markdown fences.
-        # -----------------------------------------------------
 
         response = (
             response
-            .replace(
-                "```json",
-                "",
-            )
-            .replace(
-                "```",
-                "",
-            )
+            .replace("```json", "")
+            .replace("```", "")
             .strip()
         )
 
-        # -----------------------------------------------------
-        # Direct JSON.
-        # -----------------------------------------------------
-
-        if (
-            response.startswith("{")
-            and response.endswith("}")
-        ):
-
+        if response.startswith("{") and response.endswith("}"):
             return response
 
-        # -----------------------------------------------------
-        # Find JSON object inside surrounding text.
-        # -----------------------------------------------------
+        start = response.find("{")
+        end = response.rfind("}")
 
-        start = response.find(
-            "{"
-        )
-
-        end = response.rfind(
-            "}"
-        )
-
-        if (
-            start >= 0
-            and end > start
-        ):
-
-            candidate = (
-                response[
-                    start : end + 1
-                ]
-            )
-
+        if start >= 0 and end > start:
+            candidate = response[start:end + 1]
             try:
-
-                json.loads(
-                    candidate
-                )
-
+                json.loads(candidate)
                 return candidate
-
             except json.JSONDecodeError:
-
                 pass
 
         return "{}"

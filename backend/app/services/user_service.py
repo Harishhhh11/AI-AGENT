@@ -71,7 +71,7 @@ class UserService:
         organization_id: int,
     ) -> list[User]:
 
-        return self.repository.get_all_in_organization(
+        return self.repository.get_by_organization(
             organization_id
         )
 

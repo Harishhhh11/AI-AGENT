@@ -15,6 +15,9 @@ from app.models.role_permissions import role_permissions
 from app.models.user_roles import user_roles
 
 
+ADMIN_ROLE_NAME = "organization_admin"
+
+
 def require_permission(permission: str) -> Callable:
     """Create a FastAPI dependency requiring one organization permission."""
 
@@ -26,10 +29,23 @@ def require_permission(permission: str) -> Callable:
         if current_user.is_superuser:
             return current_user
 
-        # Resolve permissions directly through the association tables.
-        # This avoids relying on SQLAlchemy relationship state and makes
-        # the authorization decision from the actual database rows:
-        # user -> user_roles -> role -> role_permissions -> permission.
+        # The canonical organization_admin role is a full administrator.
+        # Check the user's role membership directly from the database first.
+        # This makes existing tenants resilient even if their permission
+        # association rows were created before the RBAC bootstrap was added.
+        admin_role_statement = (
+            select(Role.id)
+            .select_from(user_roles)
+            .join(Role, Role.id == user_roles.c.role_id)
+            .where(user_roles.c.user_id == current_user.id)
+            .where(Role.organization_id == current_user.organization_id)
+            .where(Role.name == ADMIN_ROLE_NAME)
+        )
+
+        if db.scalar(admin_role_statement) is not None:
+            return current_user
+
+        # Resolve normal permissions through the association tables.
         statement = (
             select(PermissionModel.name)
             .select_from(user_roles)

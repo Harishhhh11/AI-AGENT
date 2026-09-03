@@ -9,7 +9,7 @@ from app.repositories.base_repository import BaseRepository
 
 class RoleRepository(BaseRepository[Role]):
     def __init__(self, db: Session):
-        super().__init__(Role, db)
+        super().__init__(db, Role)
 
     def get_by_id_in_organization(
         self,

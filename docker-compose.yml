@@ -11,6 +11,9 @@ services:
     environment:
       RUN_MIGRATIONS: "true"
       DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql+psycopg://postgres:postgres@host.docker.internal:5433/ai_receptionist}
+      # Inside Docker, Ollama is running on the Windows host.
+      # Override both names so the canonical config URL is correct too.
+      OLLAMA_BASE_URL: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
       OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"

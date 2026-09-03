@@ -85,6 +85,13 @@ class LeadContextService:
         r"\bcall\s+me\s+([A-Za-z][A-Za-z .'-]{1,80})",
     )
 
+    NON_NAME_PREFIXES = (
+        "interested", "looking", "trying", "planning", "seeking", "calling",
+        "enquiring", "inquiring", "contacting", "joining", "enrolling",
+        "registering", "buying", "purchasing", "booking", "requesting",
+        "searching", "wondering", "hoping", "checking",
+    )
+
     PHONE_PATTERN = re.compile(
         r"(?<!\d)(?:\+91[\s-]?)?(?:\d[\s-]?){10}(?!\d)"
     )
@@ -111,8 +118,12 @@ class LeadContextService:
             if role == "user":
                 if self.detect_lead_intent(content):
                     context.is_lead = True
-                    if not context.interest:
-                        context.interest = content
+                    # Lead intent is not automatically the interest.
+                    # Example: "I am interested in joining your services"
+                    # should still ask which actual product/service is wanted.
+                    detected_interest = self.extract_interest_from_intent(content)
+                    if detected_interest and not context.interest:
+                        context.interest = detected_interest
                 self._extract_explicit_information(context, content)
                 if previous_assistant_message:
                     self._apply_answer_to_requested_field(
@@ -249,13 +260,45 @@ class LeadContextService:
         normalized = self._normalize(text)
         return bool(normalized) and any(phrase in normalized for phrase in self.LEAD_INTENT_PHRASES)
 
+    def extract_interest_from_intent(self, text: str) -> str | None:
+        normalized = self._normalize(text)
+        if not normalized:
+            return None
+
+        patterns = (
+            r"\binterested\s+in\s+(?:the\s+)?(.+)$",
+            r"\bwant\s+to\s+(?:join|enroll|register)\s+(?:for\s+)?(.+)$",
+            r"\bwant\s+(?:to\s+)?(?:buy|purchase|book)\s+(.+)$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if not match:
+                continue
+            value = match.group(1).strip(" .,!?:;")
+            if not value:
+                continue
+            generic_values = {
+                "your services", "your service", "services", "a service",
+                "the services", "joining your services", "your courses",
+            }
+            if value in generic_values:
+                return None
+            if value.startswith(("joining your", "enrolling in your", "registering for your")):
+                return None
+            return value
+        return None
+
     def extract_name(self, text: str) -> str | None:
-        for pattern in self.NAME_PATTERNS:
+        for index, pattern in enumerate(self.NAME_PATTERNS):
             match = re.search(pattern, text or "", flags=re.IGNORECASE)
             if not match:
                 continue
             value = re.sub(r"\s+", " ", match.group(1).strip())
             value = re.split(r"[.!?,;:]", value, maxsplit=1)[0].strip()
+            if index in {1, 2, 3}:
+                first_word = value.split()[0].lower() if value else ""
+                if first_word in self.NON_NAME_PREFIXES:
+                    continue
             if self._looks_like_name(value):
                 return value
         return None

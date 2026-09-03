@@ -87,3 +87,37 @@ def test_email_completes_required_registration():
 
     assert context.is_complete is True
     assert service.get_next_missing_field(context) is None
+
+
+def test_generic_interested_message_does_not_become_name_or_interest():
+    service = LeadContextService()
+
+    context = service.build_context(
+        [
+            {
+                "role": "user",
+                "content": "I am interested in joining your services.",
+            },
+        ]
+    )
+
+    assert context.is_lead is True
+    assert context.name is None
+    assert context.interest is None
+    assert service.get_next_missing_field(context) == "interest"
+    assert service.get_next_question(context) == "Sure! What product or service are you interested in?"
+
+
+def test_specific_interest_is_extracted_from_lead_intent():
+    service = LeadContextService()
+
+    context = service.build_context(
+        [
+            {"role": "user", "content": "I am interested in the Python course."},
+        ]
+    )
+
+    assert context.is_lead is True
+    assert context.name is None
+    assert context.interest == "python course"
+    assert service.get_next_missing_field(context) == "name"

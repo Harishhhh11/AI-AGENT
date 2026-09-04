@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import ForeignKey
 from sqlalchemy import String
 from sqlalchemy import Text
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
@@ -17,6 +18,23 @@ from app.database.base import Base
 class Lead(Base):
 
     __tablename__ = "leads"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "conversation_id",
+            name="uq_leads_organization_conversation",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "phone",
+            name="uq_leads_organization_phone",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "email",
+            name="uq_leads_organization_email",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         primary_key=True,

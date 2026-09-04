@@ -10,6 +10,7 @@ Business logic for:
 - Lead status management
 """
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.lead import Lead
@@ -168,7 +169,21 @@ class LeadService:
                     conversation_id
                 )
 
-            self.db.commit()
+            try:
+                self.db.commit()
+            except IntegrityError:
+                self.db.rollback()
+                existing_lead = self._find_existing_lead(
+                    lead_data, organization_id, conversation_id
+                )
+                if existing_lead is None:
+                    raise
+                self._update_fields(existing_lead, lead_data)
+                if conversation_id is not None:
+                    existing_lead.conversation_id = conversation_id
+                self.db.commit()
+                self.db.refresh(existing_lead)
+                return existing_lead
 
             self.db.refresh(
                 existing_lead
@@ -201,7 +216,23 @@ class LeadService:
             lead
         )
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            # A concurrent request can win the lookup/insert race.  Re-read
+            # the organization-scoped key and merge into that lead.
+            self.db.rollback()
+            existing_lead = self._find_existing_lead(
+                lead_data, organization_id, conversation_id
+            )
+            if existing_lead is None:
+                raise
+            self._update_fields(existing_lead, lead_data)
+            if conversation_id is not None:
+                existing_lead.conversation_id = conversation_id
+            self.db.commit()
+            self.db.refresh(existing_lead)
+            return existing_lead
 
         self.db.refresh(
             lead
@@ -261,6 +292,35 @@ class LeadService:
     # =========================================================
     # UPDATE FIELDS
     # =========================================================
+
+    def _find_existing_lead(
+        self,
+        lead_data: LeadCreate,
+        organization_id: int,
+        conversation_id: int | None,
+    ) -> Lead | None:
+        """Find a matching lead using the same deterministic key order."""
+        if conversation_id is not None:
+            lead = self.repository.get_by_conversation_in_organization(
+                conversation_id, organization_id
+            )
+            if lead is not None:
+                return lead
+        if lead_data.phone:
+            phone = self._normalize_phone(lead_data.phone)
+            if phone:
+                lead = self.repository.get_by_phone_in_organization(
+                    phone, organization_id
+                )
+                if lead is not None:
+                    return lead
+        if lead_data.email:
+            email = self._normalize_email(lead_data.email)
+            if email:
+                return self.repository.get_by_email_in_organization(
+                    email, organization_id
+                )
+        return None
 
     @staticmethod
     def _update_fields(
@@ -422,27 +482,21 @@ class LeadService:
 
             return None
 
-        # Keep leading + if present.
-        has_plus = phone.startswith(
-            "+"
-        )
-
         digits = "".join(
             character
             for character in phone
             if character.isdigit()
         )
 
-        if not digits:
-
+        if not digits or not 7 <= len(digits) <= 15:
             return None
 
-        if has_plus:
-
-            return (
-                "+"
-                + digits
-            )
+        # Treat common national representations of an Indian number as the
+        # same identity (9876543210, +91 9876543210, 919876543210).
+        if len(digits) == 12 and digits.startswith("91"):
+            return digits[2:]
+        if len(digits) == 11 and digits.startswith("0"):
+            return digits[1:]
 
         return digits
 

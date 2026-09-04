@@ -1,5 +1,6 @@
 """Business rules for publishable AI receptionists."""
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.agent import Agent
@@ -13,18 +14,23 @@ class AgentService:
         self.repository = AgentRepository(db)
 
     def create(self, organization_id: int, data: AgentCreate) -> Agent:
-        if self.repository.get_by_slug(data.public_slug):
+        public_slug = data.public_slug.strip().lower()
+        if self.repository.get_by_slug(public_slug):
             raise ValueError("That public URL is already in use. Choose another slug.")
 
         agent = Agent(
             organization_id=organization_id,
             name=data.name.strip(),
-            public_slug=data.public_slug,
+            public_slug=public_slug,
             welcome_message=data.welcome_message.strip(),
             system_instructions=(data.system_instructions or "").strip() or None,
         )
         self.repository.add(agent)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ValueError("That public URL is already in use. Choose another slug.") from exc
         self.db.refresh(agent)
         return agent
 
@@ -40,6 +46,7 @@ class AgentService:
             not agent
             or not agent.is_active
             or not agent.is_published
+            or not agent.organization
             or not agent.organization.is_active
         ):
             return None

@@ -29,6 +29,21 @@ def require_permission(permission: str) -> Callable:
         if current_user.is_superuser:
             return current_user
 
+        # Keep the dependency usable in lightweight unit tests and other
+        # callers that provide an in-memory user without database identity.
+        if not hasattr(current_user, "id") or not hasattr(current_user, "organization_id"):
+            permissions = {
+                permission_item.name
+                for role in getattr(current_user, "roles", [])
+                for permission_item in getattr(role, "permissions", [])
+            }
+            if permission not in permissions:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to perform this action.",
+                )
+            return current_user
+
         # The canonical organization_admin role is a full administrator.
         # Check the user's role membership directly from the database first.
         # This makes existing tenants resilient even if their permission

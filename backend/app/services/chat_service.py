@@ -36,7 +36,13 @@ class ChatService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
-        self.llm = get_llm()
+        # Lead capture and verified-knowledge responses remain available when
+        # the optional provider is misconfigured or temporarily unavailable.
+        try:
+            self.llm = get_llm()
+        except Exception as exc:
+            print("LLM initialization error:", exc)
+            self.llm = None
         self.conversation_service = ConversationService(db)
         self.knowledge_service = KnowledgeService(db)
         self.retrieval_service = RetrievalService(self.knowledge_service)
@@ -401,7 +407,9 @@ class ChatService:
 
     @staticmethod
     def _detect_lead_intent(text: str) -> bool:
-        normalized = " ".join((text or "").strip().lower().split())
+        normalized = " ".join(
+            (text or "").strip().lower().replace("’", "'").split()
+        )
         phrases = (
             "i want to join", "i want to enroll", "i want to register", "i would like to join",
             "i would like to enroll", "i would like to register", "i want admission", "i need admission",
@@ -412,7 +420,17 @@ class ChatService:
             "how can i join", "how do i join", "how do i register", "how do i enroll", "i want to sign up",
             "i would like to sign up", "sign me up",
         )
-        return bool(normalized) and any(p in normalized for p in phrases)
+        if not normalized:
+            return False
+        for phrase in phrases:
+            match = re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", normalized)
+            if not match:
+                continue
+            prefix = normalized[max(0, match.start() - 12):match.start()]
+            if re.search(r"\b(?:do not|don't|dont|never|not)\s*$", prefix):
+                continue
+            return True
+        return False
 
     @staticmethod
     def _extract_name_from_message(message: str) -> str | None:
@@ -528,7 +546,11 @@ class ChatService:
     # Fallbacks for methods referenced by the normal path.
     @staticmethod
     def _clean_response(response: str) -> str:
-        return (response or "").strip()
+        cleaned = (response or "").strip()
+        # Models occasionally include an internal speaker prefix.  It must
+        # never be shown to a customer or used as conversation state.
+        cleaned = re.sub(r"^(?:assistant|ai receptionist)\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
 
     @staticmethod
     def _limit_text(text: str, limit: int) -> str:

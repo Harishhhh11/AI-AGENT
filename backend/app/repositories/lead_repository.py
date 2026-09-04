@@ -94,6 +94,32 @@ class LeadRepository(BaseRepository[Lead]):
 
         return self.db.scalar(statement)
 
+    def get_by_phone_in_organization(
+        self,
+        phone: str,
+        organization_id: int,
+    ) -> Lead | None:
+        statement = (
+            select(Lead)
+            .where(Lead.phone == phone)
+            .where(Lead.organization_id == organization_id)
+            .order_by(Lead.id.asc())
+        )
+        return self.db.scalar(statement)
+
+    def get_by_email_in_organization(
+        self,
+        email: str,
+        organization_id: int,
+    ) -> Lead | None:
+        statement = (
+            select(Lead)
+            .where(Lead.email == email)
+            .where(Lead.organization_id == organization_id)
+            .order_by(Lead.id.asc())
+        )
+        return self.db.scalar(statement)
+
     def get_all_in_organization(
         self,
         organization_id: int,

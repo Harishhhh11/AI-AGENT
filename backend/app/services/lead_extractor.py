@@ -16,6 +16,7 @@ from app.prompts.receptionist import (
 )
 
 from app.schemas.lead import LeadCreate
+from app.services.lead_context_service import LeadContextService
 
 
 class LeadExtractor:
@@ -27,8 +28,13 @@ class LeadExtractor:
     """
 
     def __init__(self):
-
-        self.llm = get_llm()
+        try:
+            self.llm = get_llm()
+        except Exception as exc:
+            # Extraction is an enhancement; deterministic conversation
+            # parsing must still work when no provider is configured.
+            print("Lead extraction LLM initialization error:", exc)
+            self.llm = None
 
     # =========================================================
     # EXTRACT
@@ -63,6 +69,9 @@ class LeadExtractor:
                 False,
                 LeadCreate(),
             )
+
+        if self.llm is None:
+            return self._fallback_extract(conversation_text)
 
         # -----------------------------------------------------
         # Build extraction prompt.
@@ -186,10 +195,7 @@ JSON
                 exc,
             )
 
-            return (
-                False,
-                LeadCreate(),
-            )
+            return self._fallback_extract(conversation_text)
 
         # -----------------------------------------------------
         # Clean response.
@@ -202,11 +208,7 @@ JSON
         )
 
         if not cleaned:
-
-            return (
-                False,
-                LeadCreate(),
-            )
+            return self._fallback_extract(conversation_text)
 
         # -----------------------------------------------------
         # Parse JSON.
@@ -225,20 +227,13 @@ JSON
                 exc,
             )
 
-            return (
-                False,
-                LeadCreate(),
-            )
+            return self._fallback_extract(conversation_text)
 
         if not isinstance(
             data,
             dict,
         ):
-
-            return (
-                False,
-                LeadCreate(),
-            )
+            return self._fallback_extract(conversation_text)
 
         # -----------------------------------------------------
         # Lead flag.
@@ -302,28 +297,41 @@ JSON
             )
         )
 
-        # -----------------------------------------------------
-        # If the model forgot is_lead but extracted useful
-        # customer information, treat it as a lead.
-        # -----------------------------------------------------
+        # Validate each field independently.  One hallucinated value (for
+        # example an invalid phone) must not discard the valid fields from
+        # the same model response.
+        values = {
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "interest": interest,
+            "preferred_mode": preferred_mode,
+            "preferred_time": preferred_time,
+            "notes": notes,
+        }
+        for field, value in values.items():
+            if value is None:
+                continue
+            try:
+                LeadCreate(**{field: value})
+            except Exception:
+                values[field] = None
 
-        has_useful_information = any(
-            (
-                name,
-                phone,
-                email,
-                interest,
-                preferred_mode,
-                preferred_time,
-                notes,
-            )
-        )
+        name = values["name"]
+        phone = values["phone"]
+        email = values["email"]
+        interest = values["interest"]
+        preferred_mode = values["preferred_mode"]
+        preferred_time = values["preferred_time"]
+        notes = values["notes"]
 
-        if (
-            not is_lead
-            and not has_useful_information
-        ):
+        # If the model forgot is_lead but extracted useful customer
+        # information, treat it as a lead.
+        has_useful_information = any(values.values())
 
+        # The model cannot manufacture a lead by toggling a boolean.  A lead
+        # requires either customer-provided data or a genuine intent signal.
+        if not has_useful_information:
             return (
                 False,
                 LeadCreate(),
@@ -373,6 +381,22 @@ JSON
     # =========================================================
     # JSON EXTRACTION
     # =========================================================
+
+    @staticmethod
+    def _fallback_extract(conversation_text: str) -> tuple[bool, LeadCreate]:
+        """Use the deterministic parser when the optional LLM fails."""
+        context = LeadContextService().build_context(
+            [{"role": "user", "content": conversation_text}]
+        )
+        return context.is_lead, LeadCreate(
+            name=context.name,
+            phone=context.phone,
+            email=context.email,
+            interest=context.interest,
+            preferred_mode=context.preferred_mode,
+            preferred_time=context.preferred_time,
+            notes=context.notes,
+        )
 
     @staticmethod
     def _extract_json(

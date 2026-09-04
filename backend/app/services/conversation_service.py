@@ -60,12 +60,12 @@ class ConversationService:
             )
 
             # Prevent cross-organization access.
-            if (
-                conversation
-                and conversation.organization_id
-                != organization_id
-            ):
+            if conversation and conversation.organization_id != organization_id:
+                # Session IDs are globally unique.  Never attempt to insert
+                # an attacker-supplied foreign ID after rejecting its owner,
+                # or the unique constraint would turn isolation into a 500.
                 conversation = None
+                session_id = None
 
             # A session created for one receptionist must never be reused
             # by another receptionist, even inside the same organization.

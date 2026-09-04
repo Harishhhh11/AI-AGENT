@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - 'phase-*'
+      - 'feature/*'
+      - 'fix/*'
+      - 'agents/*'
   pull_request:
     branches:
       - main
@@ -281,13 +284,8 @@ jobs:
       - name: Run deployment contracts
         run: pytest -q backend/tests/test_phase6_deployment.py
       - name: Validate compose syntax
-        run: python - <<'PY'
-import yaml
-from pathlib import Path
-with Path('docker-compose.yml').open() as f:
-    data = yaml.safe_load(f)
-assert 'backend' in data['services']
-PY
+        run: |
+          python -c "import yaml; from pathlib import Path; data = yaml.safe_load(Path('docker-compose.yml').read_text()); assert 'backend' in data['services']"
 
   phase6-security-ops:
     runs-on: ubuntu-latest
@@ -314,6 +312,27 @@ PY
             echo 'Potential private key or cloud access key material found in tracked files.' >&2
             exit 1
           fi
+
+  phase7-lead-acceptance:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install Phase 7 acceptance dependencies
+        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
+      - name: Run Phase 7 lead acceptance tests
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-test-secret-key-not-for-production
+        run: pytest -q tests/test_phase7_acceptance.py
 
   full-suite-baseline:
     runs-on: ubuntu-latest

@@ -90,7 +90,8 @@ class LeadContextService:
         "interested", "looking", "trying", "planning", "seeking", "calling",
         "enquiring", "inquiring", "contacting", "joining", "enrolling",
         "registering", "buying", "purchasing", "booking", "requesting",
-        "searching", "wondering", "hoping", "checking",
+        "searching", "wondering", "hoping", "checking", "a", "an", "the",
+        "from", "at", "in", "on",
     )
 
     PHONE_PATTERN = re.compile(
@@ -141,11 +142,22 @@ class LeadContextService:
     def _apply_extracted_lead(self, context: LeadContext, extracted_lead) -> None:
         if extracted_lead is None:
             return
-        for field in (
-            "name", "phone", "email", "interest", "preferred_mode",
-            "preferred_time", "notes",
-        ):
-            value = self._clean(getattr(extracted_lead, field, None))
+        values = {
+            field: self._clean(getattr(extracted_lead, field, None))
+            for field in (
+                "name", "phone", "email", "interest", "preferred_mode",
+                "preferred_time", "notes",
+            )
+        }
+        if values["name"] and not self._looks_like_name(values["name"]):
+            values["name"] = None
+        if values["phone"] and not self.extract_phone(values["phone"]):
+            values["phone"] = None
+        if values["email"] and not self.extract_email(values["email"]):
+            values["email"] = None
+        if values["preferred_mode"]:
+            values["preferred_mode"] = self.extract_preferred_mode(values["preferred_mode"])
+        for field, value in values.items():
             if value:
                 setattr(context, field, value)
         if self._conversation_contains_lead_data(context):
@@ -242,6 +254,8 @@ class LeadContextService:
         words = candidate.split()
         if not 1 <= len(words) <= 5:
             return None
+        if words[0].lower() in self.NON_NAME_PREFIXES:
+            return None
         for word in words:
             if not re.fullmatch(r"[A-Za-z][A-Za-z.'-]*", word):
                 return None
@@ -258,7 +272,21 @@ class LeadContextService:
 
     def detect_lead_intent(self, text: str) -> bool:
         normalized = self._normalize(text)
-        return bool(normalized) and any(phrase in normalized for phrase in self.LEAD_INTENT_PHRASES)
+        if not normalized:
+            return False
+
+        # Match complete phrases only.  Substring matching caused messages
+        # such as "don't call me" to start a lead flow.
+        for phrase in self.LEAD_INTENT_PHRASES:
+            pattern = rf"(?<!\w){re.escape(phrase)}(?!\w)"
+            match = re.search(pattern, normalized)
+            if not match:
+                continue
+            prefix = normalized[max(0, match.start() - 12):match.start()]
+            if re.search(r"\b(?:do not|don't|dont|never|not)\s*$", prefix):
+                continue
+            return True
+        return False
 
     def extract_interest_from_intent(self, text: str) -> str | None:
         normalized = self._normalize(text)
@@ -270,7 +298,7 @@ class LeadContextService:
             r"\bwant\s+to\s+(?:join|enroll|register)\s+(?:for\s+)?(.+)$",
             r"\bwant\s+(?:to\s+)?(?:buy|purchase|book)\s+(.+)$",
         )
-        for pattern in patterns:
+        for index, pattern in enumerate(patterns):
             match = re.search(pattern, normalized, flags=re.IGNORECASE)
             if not match:
                 continue
@@ -285,6 +313,17 @@ class LeadContextService:
                 return None
             if value.startswith(("joining your", "enrolling in your", "registering for your")):
                 return None
+            # Preserve the original lead statement for the legacy
+            # "join/enroll/register" flow.  It is useful context when the
+            # customer did not phrase the product as "interested in X".
+            if index == 1:
+                original = (text or "").strip().strip(".,!?;:")
+                return re.split(
+                    r"(?:[.!?,;:]|\band\s+(?:my|i)\b)",
+                    original,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip()
             return value
         return None
 
@@ -295,6 +334,12 @@ class LeadContextService:
                 continue
             value = re.sub(r"\s+", " ", match.group(1).strip())
             value = re.split(r"[.!?,;:]", value, maxsplit=1)[0].strip()
+            value = re.split(
+                r"\b(?:and|with|my\s+(?:phone|email|number))\b",
+                value,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0].strip()
             if index in {1, 2, 3}:
                 first_word = value.split()[0].lower() if value else ""
                 if first_word in self.NON_NAME_PREFIXES:
@@ -342,7 +387,14 @@ class LeadContextService:
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
-                return match.group(0).strip()
+                value = match.group(0).strip()
+                hour_match = re.match(r"(\d{1,2})(?::(\d{2}))?", value)
+                if not hour_match:
+                    continue
+                hour = int(hour_match.group(1))
+                minute = int(hour_match.group(2) or 0)
+                if 1 <= hour <= 12 and 0 <= minute <= 59:
+                    return value
         normalized = self._normalize(text)
         for value in ("morning", "afternoon", "evening", "night"):
             if value in normalized:
@@ -408,7 +460,8 @@ class LeadContextService:
 
     @staticmethod
     def _normalize(text: str) -> str:
-        return " ".join((text or "").strip().lower().split())
+        normalized = (text or "").strip().lower().replace("’", "'")
+        return " ".join(normalized.split())
 
     @staticmethod
     def _normalize_messages(messages) -> list[dict[str, str]]:

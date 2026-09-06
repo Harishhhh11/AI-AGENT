@@ -3,6 +3,7 @@ interface HeaderProps {
 }
 
 export default function Header({ onMenuClick }: HeaderProps) {
+  const user = JSON.parse(localStorage.getItem("user") ?? "null") as { first_name?: string; email?: string } | null;
   function signOut() {
     localStorage.removeItem("access_token");
     localStorage.removeItem("token_type");
@@ -25,9 +26,8 @@ export default function Header({ onMenuClick }: HeaderProps) {
         <div className="hidden items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 sm:flex">
           <span className="h-2 w-2 rounded-full bg-emerald-500" /> System online
         </div>
-        <button type="button" onClick={signOut} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 sm:text-sm">
-          Sign out
-        </button>
+        <div className="hidden text-right sm:block"><p className="text-xs font-semibold text-slate-800">{user?.first_name ?? "Workspace admin"}</p><p className="text-[11px] text-slate-400">{user?.email ?? "Secure session"}</p></div>
+        <button type="button" onClick={signOut} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 sm:text-sm">Sign out</button>
       </div>
     </header>
   );

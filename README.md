@@ -43,7 +43,8 @@ Current Version:
 
 v2.0.0
 
-Repository under active development.
+Phase 8 company admin dashboard is implemented. The repository remains under
+active development.
 
 ## License
 

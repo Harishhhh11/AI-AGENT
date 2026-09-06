@@ -8,6 +8,8 @@ const navigation = [
   { name: "Conversations", path: "/conversations" },
   { name: "Knowledge Base", path: "/knowledge" },
   { name: "Documents", path: "/documents" },
+  { name: "Team", path: "/team" },
+  { name: "Settings", path: "/settings" },
 ];
 
 interface SidebarProps {

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from time import monotonic
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,10 +21,19 @@ app = FastAPI(
     version=settings.APP_VERSION,
     debug=settings.DEBUG,
 )
+_started_at = monotonic()
+_request_counts: Counter[str] = Counter()
 
 
 if settings.ACCESS_LOG_ENABLED:
     app.add_middleware(RequestContextMiddleware)
+
+
+@app.middleware("http")
+async def request_metrics(request, call_next):
+    response = await call_next(request)
+    _request_counts[f"{request.method} {request.url.path} {response.status_code}"] += 1
+    return response
 
 
 app.add_middleware(
@@ -82,3 +94,21 @@ def ready():
         "status": "ready",
         "dependencies": {"database": "available"},
     }
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    """Expose minimal scrape-compatible process metrics without sensitive data."""
+    lines = [
+        "# HELP app_uptime_seconds Process uptime in seconds.",
+        "# TYPE app_uptime_seconds gauge",
+        f"app_uptime_seconds {monotonic() - _started_at:.3f}",
+        "# HELP app_http_requests_total HTTP responses by method, path, and status.",
+        "# TYPE app_http_requests_total counter",
+    ]
+    for labels, count in sorted(_request_counts.items()):
+        method, path, status = labels.split(" ", 2)
+        lines.append(
+            f'app_http_requests_total{{method="{method}",path="{path}",status="{status}"}} {count}'
+        )
+    return "\n".join(lines) + "\n"

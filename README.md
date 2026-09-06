@@ -1,6 +1,6 @@
 # AI Receptionist Platform
 
-An enterprise-grade multi-tenant AI Receptionist Platform built using FastAPI, SQLAlchemy, Ollama, ChromaDB, and Next.js.
+An enterprise-grade multi-tenant AI Receptionist Platform built using FastAPI, SQLAlchemy, Ollama, and Next.js.
 
 ## Vision
 

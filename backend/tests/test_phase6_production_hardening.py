@@ -68,7 +68,7 @@ def test_production_accepts_strong_secret_and_explicit_origins():
         ENVIRONMENT="production",
         DEBUG=False,
         SECRET_KEY="s" * 64,
-        DATABASE_URL="sqlite:///./ci_test.db",
+        DATABASE_URL="postgresql+psycopg://user:pass@db/app",
         CORS_ALLOWED_ORIGINS="https://example.com",
     )
 

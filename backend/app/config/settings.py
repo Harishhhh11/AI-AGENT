@@ -92,6 +92,10 @@ class Settings(BaseSettings):
                 raise ValueError("SECRET_KEY must be a strong value of at least 32 characters in production")
             if not self.CORS_ALLOWED_ORIGINS.strip():
                 raise ValueError("CORS_ALLOWED_ORIGINS must be explicitly configured in production")
+            if "*" in self.cors_allowed_origins:
+                raise ValueError("Wildcard CORS origins are not allowed in production")
+            if self.DATABASE_URL.lower().startswith("sqlite"):
+                raise ValueError("SQLite is not supported in production; configure PostgreSQL")
         return self
 
 

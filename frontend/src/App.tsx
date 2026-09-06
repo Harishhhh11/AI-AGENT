@@ -12,6 +12,7 @@ import Conversations from "./pages/Conversations";
 import Knowledge from "./pages/Knowledge";
 import Documents from "./pages/Documents";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import Chat from "./pages/Chat.tsx";
 import PublicChat from "./pages/PublicChat";
 import Agents from "./pages/Agents";
@@ -35,6 +36,7 @@ function App() {
             <Login />
           }
         />
+        <Route path="/register" element={<Register />} />
 
         <Route path="/chat/:slug" element={<PublicChat />} />
 

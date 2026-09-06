@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { login } from "../api/auth";
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,32 +23,7 @@ function Login() {
     setLoading(true);
 
     try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/api/v1/auth/login",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({
-            email,
-            password,
-          }),
-        }
-      );
-
-      const result = await response.json();
-
-      console.log("LOGIN RESPONSE:", result);
-
-      if (!response.ok) {
-        throw new Error(
-          result?.detail ||
-            result?.message ||
-            "Login failed."
-        );
-      }
+      const result = await login(email, password);
 
       /*
        * Backend response:
@@ -80,10 +57,6 @@ function Login() {
       localStorage.setItem(
         "token_type",
         result?.data?.token_type || "bearer"
-      );
-
-      console.log(
-        "Login successful. Token saved."
       );
 
       // Go to dashboard
@@ -125,6 +98,7 @@ function Login() {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">Welcome back</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">Sign in to your workspace</h1>
           <p className="mt-2 text-sm text-slate-500">Access your AI receptionist dashboard.</p>
+          {location.state?.message && <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{location.state.message}</p>}
         </div>
 
         <form onSubmit={handleSubmit}>
@@ -185,6 +159,7 @@ function Login() {
               : "Sign In"}
           </button>
         </form>
+        <p className="mt-6 text-center text-sm text-slate-500">New here? <Link to="/register" className="font-semibold text-indigo-600 hover:text-indigo-800">Create a workspace</Link></p>
         </div>
       </div>
     </div>

@@ -1,6 +1,4 @@
-import {
-  Outlet,
-} from "react-router-dom";
+import { Navigate, Outlet } from "react-router-dom";
 import { useState } from "react";
 
 import Sidebar from "./Sidebar";
@@ -8,6 +6,7 @@ import Header from "./Header";
 
 export default function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  if (!localStorage.getItem("access_token")) return <Navigate to="/login" replace />;
 
   return (
     <div className="flex min-h-screen bg-[#f5f7fb]">

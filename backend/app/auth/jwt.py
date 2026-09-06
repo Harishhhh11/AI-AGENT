@@ -3,7 +3,12 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jose import JWTError, jwt
+from jwt import InvalidTokenError
+from jwt import decode
+from jwt import encode
+
+
+JWTError = InvalidTokenError
 
 from app.core.config import settings
 
@@ -22,7 +27,7 @@ def create_access_token(
         minutes=expires_minutes
     )
 
-    return jwt.encode(
+    return encode(
         payload,
         settings.SECRET_KEY,
         algorithm=ALGORITHM,
@@ -35,7 +40,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
     Raises ``JWTError`` when the token is invalid or expired.
     """
 
-    payload = jwt.decode(
+    payload = decode(
         token,
         settings.SECRET_KEY,
         algorithms=[ALGORITHM],

@@ -15,6 +15,8 @@ import Login from "./pages/Login";
 import Chat from "./pages/Chat.tsx";
 import PublicChat from "./pages/PublicChat";
 import Agents from "./pages/Agents";
+import Team from "./pages/Team";
+import Settings from "./pages/Settings";
 
 function App() {
 
@@ -58,6 +60,8 @@ function App() {
           />
 
           <Route path="/agents" element={<Agents />} />
+          <Route path="/team" element={<Team />} />
+          <Route path="/settings" element={<Settings />} />
 
           <Route
             path="/leads"

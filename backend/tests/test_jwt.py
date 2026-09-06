@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 
 from app.auth.jwt import create_access_token, decode_access_token
 

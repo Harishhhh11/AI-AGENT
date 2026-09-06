@@ -18,6 +18,7 @@ import Agents from "./pages/Agents";
 import Team from "./pages/Team";
 import Settings from "./pages/Settings";
 import Analytics from "./pages/Analytics";
+import Integrations from "./pages/Integrations";
 
 function App() {
 
@@ -64,6 +65,7 @@ function App() {
           <Route path="/team" element={<Team />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/integrations" element={<Integrations />} />
 
           <Route
             path="/leads"

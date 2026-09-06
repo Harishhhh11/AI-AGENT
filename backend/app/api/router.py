@@ -17,6 +17,7 @@ from app.api.v1.documents import (
 from app.api.v1.knowledge import (
     router as knowledge_router,
 )
+from app.api.v1.integrations import router as integrations_router
 from app.api.v1.leads import (
     router as leads_router,
 )
@@ -81,6 +82,11 @@ api_router.include_router(
 # Knowledge Base
 api_router.include_router(
     knowledge_router,
+)
+
+# Integration catalog and provider readiness
+api_router.include_router(
+    integrations_router,
 )
 
 # Documents

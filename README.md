@@ -43,8 +43,8 @@ Current Version:
 
 v2.0.0
 
-Phase 9 analytics is implemented alongside the company admin dashboard. The
-repository remains under active development.
+Phase 10 integrations is implemented alongside analytics and the company admin
+dashboard. The repository remains under active development.
 
 ## License
 

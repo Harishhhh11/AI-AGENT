@@ -11,6 +11,7 @@ const navigation = [
   { name: "Team", path: "/team" },
   { name: "Settings", path: "/settings" },
   { name: "Analytics", path: "/analytics" },
+  { name: "Integrations", path: "/integrations" },
 ];
 
 interface SidebarProps {

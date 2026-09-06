@@ -43,8 +43,9 @@ Current Version:
 
 v2.0.0
 
-Phase 10 integrations is implemented alongside analytics and the company admin
-dashboard. The repository remains under active development.
+Phase 11 testing and quality is implemented alongside integrations, analytics,
+and the company admin dashboard. The repository remains under active
+development.
 
 ## License
 

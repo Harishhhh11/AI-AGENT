@@ -24,7 +24,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
     Promise.all([getLeads(), getConversations(), getKnowledge()])
       .then(([leadsData, conversationData, knowledgeData]) => {
         if (!mounted) return;
@@ -37,11 +36,11 @@ export default function Dashboard() {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : "Failed to load workspace data.");
       })
-      .finally(() => mounted && setLoading(false));
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
 
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [refreshToken]);
 
   const recentLeads = useMemo(() => [...leads].sort((a, b) => b.id - a.id).slice(0, 5), [leads]);

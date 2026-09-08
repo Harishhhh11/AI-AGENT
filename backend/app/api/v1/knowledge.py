@@ -46,11 +46,14 @@ def get_knowledge(
         raise HTTPException(status_code=400, detail="Invalid knowledge scope.")
     if agent_id is not None and not AgentService(db).get(agent_id, current_user.organization_id):
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
-    return KnowledgeService(db).get_all(
-        organization_id=current_user.organization_id,
-        agent_id=agent_id,
-        scope=scope,
-    )
+    try:
+        return KnowledgeService(db).get_all(
+            organization_id=current_user.organization_id,
+            agent_id=agent_id,
+            scope=scope,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{knowledge_id}", response_model=KnowledgeResponse)
@@ -72,19 +75,27 @@ def update_knowledge(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if data.agent_id is not None and not AgentService(db).get(data.agent_id, current_user.organization_id):
-        raise HTTPException(status_code=404, detail="AI receptionist not found.")
+    update_values = data.model_dump(exclude_unset=True)
+    if "agent_id" in update_values:
+        target_agent_id = update_values["agent_id"]
+        if target_agent_id is not None and not AgentService(db).get(target_agent_id, current_user.organization_id):
+            raise HTTPException(status_code=404, detail="AI receptionist not found.")
+
+    service = KnowledgeService(db)
+    kwargs = {
+        "knowledge_id": knowledge_id,
+        "organization_id": current_user.organization_id,
+        "title": data.title,
+        "content": data.content,
+        "source": data.source,
+        "category": data.category,
+        "is_active": data.is_active,
+    }
+    if "agent_id" in update_values:
+        kwargs["agent_id"] = update_values["agent_id"]
+
     try:
-        item = KnowledgeService(db).update(
-            knowledge_id=knowledge_id,
-            organization_id=current_user.organization_id,
-            title=data.title,
-            content=data.content,
-            source=data.source,
-            category=data.category,
-            agent_id=data.agent_id,
-            is_active=data.is_active,
-        )
+        item = service.update(**kwargs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if item is None:

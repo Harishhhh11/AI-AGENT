@@ -19,6 +19,14 @@ class KnowledgeRanker:
         except (TypeError, ValueError):
             limit = 5
 
+        # Company-wide prompts such as "what courses do you offer?" can contain
+        # no meaningful subject terms after stop-word removal. In that case the
+        # KnowledgeService has already produced the best tenant-scoped candidates;
+        # preserve their order instead of incorrectly treating them as irrelevant.
+        meaningful_terms = self.relevance._meaningful_terms(query)
+        if not meaningful_terms:
+            return list(items[:limit])
+
         scored: list[tuple[float, float, int, object]] = []
         for item in items:
             result = self.relevance.score(

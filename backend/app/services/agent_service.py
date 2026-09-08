@@ -15,7 +15,8 @@ class AgentService:
         self.db = db
         self.repository = AgentRepository(db)
 
-    def _knowledge_ids(self, agent: Agent) -> list[int]:
+    @staticmethod
+    def _knowledge_ids(agent: Agent) -> list[int]:
         return [
             int(item.id)
             for item in (agent.knowledge_items or [])
@@ -28,33 +29,7 @@ class AgentService:
             raise ValueError("That public URL is already in use. Choose another slug.")
 
         selected_ids = list(dict.fromkeys(data.knowledge_item_ids or []))
-        if selected_ids:
-            items = list(
-                self.db.scalars(
-                    select(KnowledgeBase).where(
-                        KnowledgeBase.organization_id == organization_id,
-                        KnowledgeBase.id.in_(selected_ids),
-                        KnowledgeBase.is_active.is_(True),
-                    )
-                ).all()
-            )
-            found_ids = {int(item.id) for item in items}
-            missing = [item_id for item_id in selected_ids if item_id not in found_ids]
-            if missing:
-                raise ValueError("One or more selected knowledge items are not available in this organization.")
-            assigned_elsewhere = [
-                item for item in items
-                if item.agent_id is not None
-            ]
-            if assigned_elsewhere:
-                names = ", ".join(item.title for item in assigned_elsewhere[:3])
-                suffix = "" if len(assigned_elsewhere) <= 3 else " and more"
-                raise ValueError(
-                    f"These knowledge items are already assigned to another receptionist: {names}{suffix}. "
-                    "Move them from Knowledge Management before selecting them here."
-                )
-        else:
-            items = []
+        items = self._load_selected_items(organization_id, selected_ids)
 
         agent = Agent(
             organization_id=organization_id,
@@ -67,11 +42,19 @@ class AgentService:
         try:
             self.db.flush()
             for item in items:
+                if item.agent_id is not None:
+                    raise ValueError(
+                        f'"{item.title}" is already assigned to another receptionist. '
+                        "Move it to shared scope before selecting it here."
+                    )
                 item.agent_id = agent.id
             self.db.commit()
         except IntegrityError as exc:
             self.db.rollback()
             raise ValueError("That public URL is already in use. Choose another slug.") from exc
+        except ValueError:
+            self.db.rollback()
+            raise
         self.db.refresh(agent)
         return agent
 
@@ -96,6 +79,23 @@ class AgentService:
             ).all()
         )
 
+    def _load_selected_items(self, organization_id: int, selected_ids: list[int]) -> list[KnowledgeBase]:
+        if not selected_ids:
+            return []
+        items = list(
+            self.db.scalars(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.organization_id == organization_id,
+                    KnowledgeBase.id.in_(selected_ids),
+                    KnowledgeBase.is_active.is_(True),
+                )
+            ).all()
+        )
+        found_ids = {int(item.id) for item in items}
+        if any(item_id not in found_ids for item_id in selected_ids):
+            raise ValueError("One or more selected knowledge items are not available in this organization.")
+        return items
+
     def set_knowledge(
         self,
         agent_id: int,
@@ -107,32 +107,26 @@ class AgentService:
             return None
 
         selected_ids = list(dict.fromkeys(knowledge_item_ids or []))
-        items = list(
+        items = self._load_selected_items(organization_id, selected_ids)
+
+        existing = list(
             self.db.scalars(
                 select(KnowledgeBase).where(
                     KnowledgeBase.organization_id == organization_id,
-                    KnowledgeBase.id.in_(selected_ids) if selected_ids else KnowledgeBase.id == -1,
-                    KnowledgeBase.is_active.is_(True),
+                    KnowledgeBase.agent_id == agent_id,
                 )
             ).all()
         )
-        found_ids = {int(item.id) for item in items}
-        missing = [item_id for item_id in selected_ids if item_id not in found_ids]
-        if missing:
-            raise ValueError("One or more selected knowledge items do not belong to this organization or are inactive.")
-
-        for item in self.db.scalars(
-            select(KnowledgeBase).where(
-                KnowledgeBase.organization_id == organization_id,
-                KnowledgeBase.agent_id == agent_id,
-            )
-        ).all():
-            item.agent_id = None
+        selected_set = set(selected_ids)
+        for item in existing:
+            if item.id not in selected_set:
+                item.agent_id = None
 
         for item in items:
             if item.agent_id not in (None, agent_id):
                 raise ValueError(
-                    f'"{item.title}" is already assigned to another receptionist. Reassign it explicitly from Knowledge Management first.'
+                    f'"{item.title}" is already assigned to another receptionist. '
+                    "Reassign it from Knowledge Management first."
                 )
             item.agent_id = agent_id
 

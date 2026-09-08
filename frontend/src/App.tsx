@@ -24,6 +24,7 @@ export default function App() {
     <Route element={<DashboardLayout />}>
       <Route path="/" element={<Dashboard />} />
       <Route path="/chat" element={<ChatV2 />} />
+      <Route path="/chat/agent/:agentId" element={<ChatV2 />} />
       <Route path="/chat-classic" element={<Chat />} />
       <Route path="/agents" element={<Agents />} />
       <Route path="/team" element={<Team />} />

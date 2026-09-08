@@ -1,4 +1,5 @@
 import { get, patch, post, put } from "./client";
+import type { KnowledgeItem } from "./knowledge";
 
 export interface Agent {
   id: number;
@@ -31,7 +32,7 @@ export const getAgents = () => get<Agent[]>("/agents");
 export const getAgent = (id: number) => get<Agent>(`/agents/${id}`);
 export const createAgent = (data: AgentCreate) => post<Agent, AgentCreate>("/agents", data);
 export const updateAgent = (id: number, data: Partial<AgentCreate & { is_active: boolean }>) => patch<Agent, typeof data>(`/agents/${id}`, data);
-export const getAgentKnowledge = (id: number) => get<import("./knowledge").KnowledgeItem[]>(`/agents/${id}/knowledge`);
+export const getAgentKnowledge = (id: number) => get<KnowledgeItem[]>(`/agents/${id}/knowledge`);
 export const updateAgentKnowledge = (id: number, data: AgentKnowledgeUpdate) => put<Agent, AgentKnowledgeUpdate>(`/agents/${id}/knowledge`, data);
 export const publishAgent = (id: number) => post<Agent, Record<string, never>>(`/agents/${id}/publish`, {});
 export const unpublishAgent = (id: number) => post<Agent, Record<string, never>>(`/agents/${id}/unpublish`, {});

@@ -40,14 +40,14 @@ async def test_blank_message_returns_help_prompt() -> None:
 
 def test_short_response_limit_is_not_too_long() -> None:
     service = ChatService.__new__(ChatService)
-    text = "A" * 500
+    text = "A" * 700
 
     result = service._apply_response_length_guard(
         response=text,
         response_style="short",
     )
 
-    assert len(result) <= ChatService.MAX_SHORT_RESPONSE_CHARS
+    assert len(result) <= 500
 
 
 def test_response_cleanup_removes_internal_prefix() -> None:

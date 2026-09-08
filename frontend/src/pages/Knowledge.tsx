@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { getAgents } from "../api/agents";
@@ -60,7 +60,7 @@ export default function Knowledge() {
   }
   function replaceItem(updated: KnowledgeItem) { setItems((current) => current.map((item) => item.id === updated.id ? updated : item)); }
 
-  async function submitForm(event: React.FormEvent<HTMLFormElement>) {
+  async function submitForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const title = form.title.trim(); const content = form.content.trim(); const source = form.source.trim() || "manual"; const selectedCategory = form.category.trim();
     if (!title || !content || !selectedCategory) { setError("Add a title, category, and the information your receptionist should use."); return; }

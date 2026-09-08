@@ -17,10 +17,11 @@ class RelevanceResult:
 
 
 class RelevanceService:
-    """Combine lexical and semantic evidence while avoiding subject leakage."""
+    """Combine lexical and semantic evidence without weakening tenant scope."""
 
     MIN_ACCEPT_SCORE = 0.25
     STRONG_LEXICAL_SCORE = 0.50
+    SEMANTIC_ONLY_MAX_DISTANCE = 0.36
     GENERIC_TERMS = {
         "what", "which", "how", "when", "where", "why", "who", "does", "do", "did", "is", "are", "am",
         "can", "could", "would", "will", "should", "you", "your", "we", "our", "i", "me", "my", "the",
@@ -45,7 +46,10 @@ class RelevanceService:
         lexical = min(1.0, 0.65 * coverage + 0.25 * title_coverage + phrase_bonus)
         semantic = self._semantic_score(semantic_distance)
         combined = max(lexical, 0.72 * lexical + 0.28 * semantic)
-        accepted = bool(matched) and (lexical >= self.STRONG_LEXICAL_SCORE or combined >= self.MIN_ACCEPT_SCORE)
+        semantic_distance_value = self._safe_distance(semantic_distance)
+        lexical_accept = bool(matched) and (lexical >= self.STRONG_LEXICAL_SCORE or combined >= self.MIN_ACCEPT_SCORE)
+        semantic_accept = not matched and semantic_distance_value is not None and semantic_distance_value <= self.SEMANTIC_ONLY_MAX_DISTANCE
+        accepted = lexical_accept or semantic_accept
         return RelevanceResult(
             lexical_score=round(lexical, 4),
             semantic_score=round(semantic, 4),
@@ -72,10 +76,18 @@ class RelevanceService:
         return " ".join((value or "").lower().split())
 
     @staticmethod
-    def _semantic_score(distance: float | None) -> float:
+    def _safe_distance(distance: float | None) -> float | None:
         if distance is None:
-            return 0.0
+            return None
         try:
-            return max(0.0, min(1.0, 1.0 - float(distance)))
+            value = float(distance)
         except (TypeError, ValueError):
+            return None
+        return value if 0.0 <= value <= 1.0 else None
+
+    @classmethod
+    def _semantic_score(cls, distance: float | None) -> float:
+        value = cls._safe_distance(distance)
+        if value is None:
             return 0.0
+        return max(0.0, min(1.0, 1.0 - value))

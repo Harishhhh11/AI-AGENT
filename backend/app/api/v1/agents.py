@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import require_permission
-from app.auth.permissions import Permission
 from app.auth.dependencies import get_current_user
+from app.auth.permissions import Permission
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.agent import (
@@ -24,6 +24,19 @@ from app.services.chat_service import ChatService
 router = APIRouter(tags=["AI Receptionists"])
 
 
+def _authorized_user(current_user: User, permission: str) -> User:
+    """Apply the project's authorization helper to an already resolved user."""
+    if current_user.is_superuser:
+        return current_user
+    # The canonical project helper raises PermissionError for a missing role
+    # permission. Convert it to the same HTTP contract used by the dependency.
+    try:
+        require_permission(current_user, permission)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return current_user
+
+
 def _agent_response(agent) -> AgentResponse:
     data = AgentResponse.model_validate(agent)
     data.knowledge_item_ids = [
@@ -40,7 +53,7 @@ def create_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_CREATE)
+    _authorized_user(current_user, Permission.AGENT_CREATE)
     try:
         return _agent_response(AgentService(db).create(current_user.organization_id, data))
     except ValueError as exc:
@@ -52,7 +65,7 @@ def list_agents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_READ)
+    _authorized_user(current_user, Permission.AGENT_READ)
     return [_agent_response(agent) for agent in AgentService(db).get_all(current_user.organization_id)]
 
 
@@ -62,7 +75,7 @@ def get_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_READ)
+    _authorized_user(current_user, Permission.AGENT_READ)
     agent = AgentService(db).get(agent_id, current_user.organization_id)
     if not agent:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
@@ -75,7 +88,7 @@ def get_agent_knowledge(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_READ)
+    _authorized_user(current_user, Permission.AGENT_READ)
     items = AgentService(db).get_knowledge(agent_id, current_user.organization_id)
     if items is None:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
@@ -89,7 +102,7 @@ def update_agent_knowledge(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_UPDATE)
+    _authorized_user(current_user, Permission.AGENT_UPDATE)
     try:
         agent = AgentService(db).set_knowledge(agent_id, current_user.organization_id, data.knowledge_item_ids)
     except ValueError as exc:
@@ -106,7 +119,7 @@ def update_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_UPDATE)
+    _authorized_user(current_user, Permission.AGENT_UPDATE)
     agent = AgentService(db).update(agent_id, current_user.organization_id, data)
     if not agent:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
@@ -119,7 +132,7 @@ def publish_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_UPDATE)
+    _authorized_user(current_user, Permission.AGENT_UPDATE)
     try:
         agent = AgentService(db).set_published(agent_id, current_user.organization_id, True)
     except ValueError as exc:
@@ -135,7 +148,7 @@ def unpublish_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_permission(current_user, Permission.AGENT_UPDATE)
+    _authorized_user(current_user, Permission.AGENT_UPDATE)
     agent = AgentService(db).set_published(agent_id, current_user.organization_id, False)
     if not agent:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")

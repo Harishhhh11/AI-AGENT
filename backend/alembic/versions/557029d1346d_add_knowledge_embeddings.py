@@ -7,6 +7,7 @@ Create Date: 2026-08-15 19:55:41.799733
 """
 
 from typing import Sequence, Union
+from uuid import uuid4
 
 from alembic import op
 import sqlalchemy as sa
@@ -52,14 +53,38 @@ def upgrade() -> None:
         ),
     )
 
-    # Generate UUID values for existing rows.
-    op.execute(
-        """
-        UPDATE knowledge_base
-        SET uuid = gen_random_uuid()
-        WHERE uuid IS NULL
-        """
-    )
+    # Generate UUID values for existing rows. PostgreSQL can use
+    # gen_random_uuid(), while SQLite must use Python-generated UUIDs.
+    connection = op.get_bind()
+    dialect = connection.dialect.name
+    if dialect == "postgresql":
+        op.execute(
+            sa.text(
+                """
+                UPDATE knowledge_base
+                SET uuid = gen_random_uuid()
+                WHERE uuid IS NULL
+                """
+            )
+        )
+    elif dialect == "sqlite":
+        rows = connection.execute(
+            sa.text("SELECT id FROM knowledge_base WHERE uuid IS NULL")
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                sa.text("UPDATE knowledge_base SET uuid = :uuid WHERE id = :id"),
+                {"uuid": str(uuid4()), "id": row[0]},
+            )
+    else:
+        rows = connection.execute(
+            sa.text("SELECT id FROM knowledge_base WHERE uuid IS NULL")
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                sa.text("UPDATE knowledge_base SET uuid = :uuid WHERE id = :id"),
+                {"uuid": str(uuid4()), "id": row[0]},
+            )
 
     # UUID is now populated for existing rows.
     op.alter_column(
@@ -85,11 +110,13 @@ def upgrade() -> None:
 
     # Existing knowledge records should be active.
     op.execute(
-        """
-        UPDATE knowledge_base
-        SET is_active = TRUE
-        WHERE is_active IS NULL
-        """
+        sa.text(
+            """
+            UPDATE knowledge_base
+            SET is_active = TRUE
+            WHERE is_active IS NULL
+            """
+        )
     )
 
     op.alter_column(

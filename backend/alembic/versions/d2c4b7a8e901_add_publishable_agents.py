@@ -43,25 +43,49 @@ def upgrade() -> None:
 
     # Nullable columns preserve all existing organization-level data. New
     # public conversations receive agent_id through ConversationService.
-    op.add_column("conversations", sa.Column("agent_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_conversations_agent_id_agents",
-        "conversations",
-        "agents",
-        ["agent_id"], ["id"],
-        ondelete="SET NULL",
-    )
+    # SQLite cannot add a foreign-key constraint with ALTER TABLE, so use
+    # Alembic batch mode to copy rows into the amended table definition.
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("conversations") as batch_op:
+            batch_op.add_column(sa.Column("agent_id", sa.Integer(), nullable=True))
+            batch_op.create_foreign_key(
+                "fk_conversations_agent_id_agents",
+                "agents",
+                ["agent_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+    else:
+        op.add_column("conversations", sa.Column("agent_id", sa.Integer(), nullable=True))
+        op.create_foreign_key(
+            "fk_conversations_agent_id_agents",
+            "conversations",
+            "agents",
+            ["agent_id"], ["id"],
+            ondelete="SET NULL",
+        )
     op.create_index(op.f("ix_conversations_agent_id"), "conversations", ["agent_id"], unique=False)
 
     # NULL knowledge remains shared by every receptionist in the company.
-    op.add_column("knowledge_base", sa.Column("agent_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_knowledge_base_agent_id_agents",
-        "knowledge_base",
-        "agents",
-        ["agent_id"], ["id"],
-        ondelete="CASCADE",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("knowledge_base") as batch_op:
+            batch_op.add_column(sa.Column("agent_id", sa.Integer(), nullable=True))
+            batch_op.create_foreign_key(
+                "fk_knowledge_base_agent_id_agents",
+                "agents",
+                ["agent_id"],
+                ["id"],
+                ondelete="CASCADE",
+            )
+    else:
+        op.add_column("knowledge_base", sa.Column("agent_id", sa.Integer(), nullable=True))
+        op.create_foreign_key(
+            "fk_knowledge_base_agent_id_agents",
+            "knowledge_base",
+            "agents",
+            ["agent_id"], ["id"],
+            ondelete="CASCADE",
+        )
     op.create_index(op.f("ix_knowledge_base_agent_id"), "knowledge_base", ["agent_id"], unique=False)
 
 

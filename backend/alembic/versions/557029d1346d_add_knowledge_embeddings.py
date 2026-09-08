@@ -65,8 +65,6 @@ def upgrade() -> None:
                 {"uuid": str(uuid4()), "id": row[0]},
             )
 
-    op.alter_column("knowledge_base", "uuid", nullable=False)
-
     if not _column_exists(connection, "knowledge_base", "is_active"):
         op.add_column(
             "knowledge_base",
@@ -80,7 +78,30 @@ def upgrade() -> None:
             "WHERE is_active IS NULL"
         )
     )
-    op.alter_column("knowledge_base", "is_active", nullable=False)
+
+    if connection.dialect.name == "sqlite":
+        # SQLite cannot ALTER a column in place. Batch mode recreates the
+        # table with NOT NULL constraints while copying every existing row,
+        # including generated UUIDs and nullable embeddings.
+        with op.batch_alter_table(
+            "knowledge_base",
+            recreate="always",
+        ) as batch_op:
+            batch_op.alter_column(
+                "uuid",
+                existing_type=sa.UUID(),
+                nullable=False,
+            )
+            batch_op.alter_column(
+                "is_active",
+                existing_type=sa.Boolean(),
+                nullable=False,
+            )
+    else:
+        # PostgreSQL supports ALTER COLUMN directly and retains its native
+        # UUID type and NOT NULL constraint.
+        op.alter_column("knowledge_base", "uuid", nullable=False)
+        op.alter_column("knowledge_base", "is_active", nullable=False)
 
     inspector = sa.inspect(connection)
     index_names = {index["name"] for index in inspector.get_indexes("knowledge_base")}

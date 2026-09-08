@@ -26,21 +26,21 @@ function PublicChatInterface() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     void getPublicAgent(slug)
       .then((value) => {
         if (cancelled) return;
         setAgent(value);
         setMessages([{ id: Date.now(), role: "assistant", content: value.welcome_message }]);
       })
-      .catch((reason: unknown) => !cancelled && setError(reason instanceof Error ? reason.message : "Unable to load this receptionist."))
-      .finally(() => !cancelled && setLoading(false));
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load this receptionist.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => { cancelled = true; };
   }, [slug]);
 
-  // Do not implicitly return the result of scrollIntoView. React treats an
-  // effect return value as a cleanup function; some browser implementations
-  // return a non-function value here, causing "destroy is not a function".
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
@@ -57,15 +57,13 @@ function PublicChatInterface() {
         throw new Error("The receptionist returned an invalid response. Please try again.");
       }
       setSessionId(result.session_id);
-      try {
-        localStorage.setItem(storageKey, result.session_id);
-      } catch {
-        // Chat continues even when browser storage is unavailable.
-      }
-      setMessages((current) => [...current, { id: Date.now() + 1, role: "assistant", content: String(result.response) }]);
+      try { localStorage.setItem(storageKey, result.session_id); } catch { /* Continue without persistence. */ }
+      setMessages((current) => [...current, { id: Date.now() + 1, role: "assistant", content: result.response }]);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to send your message.");
-    } finally { setSending(false); }
+    } finally {
+      setSending(false);
+    }
   }
 
   if (loading) return <main className="grid min-h-screen place-items-center bg-slate-950 text-sm font-medium text-slate-300">Loading assistant…</main>;
@@ -90,19 +88,10 @@ function PublicChatInterface() {
 
 class PublicChatErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean; message: string }> {
   state = { failed: false, message: "" };
-
-  static getDerivedStateFromError(error: Error) {
-    return { failed: true, message: error.message || "An unexpected rendering error occurred." };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("Public chat interface error:", error, info);
-  }
-
+  static getDerivedStateFromError(error: Error) { return { failed: true, message: error.message || "An unexpected rendering error occurred." }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error("Public chat interface error:", error, info); }
   render() {
-    if (this.state.failed) {
-      return <main className="grid min-h-screen place-items-center bg-slate-950 px-6 text-center"><div><p className="text-xl font-bold text-white">Unable to display the chat</p><p className="mt-2 text-sm text-slate-400">{this.state.message}</p><button type="button" onClick={() => window.location.reload()} className="mt-5 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">Refresh chat</button></div></main>;
-    }
+    if (this.state.failed) return <main className="grid min-h-screen place-items-center bg-slate-950 px-6 text-center"><div><p className="text-xl font-bold text-white">Unable to display the chat</p><p className="mt-2 text-sm text-slate-400">{this.state.message}</p><button type="button" onClick={() => window.location.reload()} className="mt-5 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">Refresh chat</button></div></main>;
     return this.props.children;
   }
 }

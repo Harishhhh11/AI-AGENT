@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { createAgent, getAgents, publishAgent, unpublishAgent } from "../api/agents";
 import type { Agent, AgentCreate } from "../api/agents";
@@ -34,6 +35,7 @@ export default function Agents() {
 
   async function openCreate() {
     setOpen(true);
+    setForm({ ...EMPTY });
     setError("");
     setKnowledgeSearch("");
     setLoadingKnowledge(true);
@@ -90,7 +92,7 @@ export default function Agents() {
     }));
   }
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setError("");
@@ -172,7 +174,6 @@ export default function Agents() {
             <label><span className="mb-1.5 block text-sm font-semibold text-slate-700">Public URL slug</span><div className="flex overflow-hidden rounded-xl border border-slate-200 bg-slate-50 focus-within:border-indigo-400"><span className="px-3 py-2.5 text-sm text-slate-400">/chat/</span><input required value={form.public_slug} onChange={(e) => setForm((v) => ({ ...v, public_slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-") }))} className="min-w-0 flex-1 bg-transparent py-2.5 pr-3 text-sm outline-none" /></div></label>
             <label><span className="mb-1.5 block text-sm font-semibold text-slate-700">Welcome message</span><input required value={form.welcome_message} onChange={(e) => setForm((v) => ({ ...v, welcome_message: e.target.value }))} className="input" /></label>
             <label><span className="mb-1.5 block text-sm font-semibold text-slate-700">Behaviour instructions</span><textarea value={form.system_instructions} onChange={(e) => setForm((v) => ({ ...v, system_instructions: e.target.value }))} rows={4} placeholder="Be warm, concise, helpful and use only verified receptionist knowledge." className="input resize-y" /></label>
-
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
               <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-slate-800">Source knowledge</p><p className="mt-1 text-xs text-slate-500">{form.knowledge_item_ids.length} selected · shared items only</p></div><span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500">Required for private answers</span></div>
               <input value={knowledgeSearch} onChange={(e) => setKnowledgeSearch(e.target.value)} placeholder="Search knowledge..." className="input mt-3" />
@@ -185,7 +186,6 @@ export default function Agents() {
                 })}
               </div>
             </div>
-
             <div className="flex justify-end gap-2"><button type="button" onClick={() => { setOpen(false); setForm({ ...EMPTY }); }} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button><button disabled={saving} className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Creating…" : "Create draft"}</button></div>
           </form>
         </section>

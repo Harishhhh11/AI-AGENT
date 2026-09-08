@@ -1,8 +1,8 @@
 """Knowledge retrieval orchestration.
 
-Retrieves organization-scoped knowledge using both direct keyword search and
-semantic search, preserves the active agent boundary, and ranks candidates
-for answer generation.
+Retrieves organization-scoped knowledge using direct lexical search and
+semantic vector search, preserves the active agent boundary, and ranks
+candidates for answer generation.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from app.services.knowledge_service import KnowledgeService
 class RetrievalService:
     DEFAULT_LIMIT = 5
     MAX_LIMIT = 10
-    CANDIDATE_LIMIT = 12
+    CANDIDATE_LIMIT = 20
 
     def __init__(self, knowledge_service: KnowledgeService) -> None:
         self.knowledge_service = knowledge_service
@@ -33,7 +33,6 @@ class RetrievalService:
         query = (query or "").strip()
         if not query:
             return []
-
         try:
             limit = max(1, min(int(limit or self.DEFAULT_LIMIT), self.MAX_LIMIT))
         except (TypeError, ValueError):
@@ -41,7 +40,6 @@ class RetrievalService:
 
         normalized_subject = self._normalize_subject(subject)
         retrieval_query = self._build_query(query, normalized_subject)
-
         try:
             results = self.knowledge_service.search(
                 organization_id=organization_id,
@@ -55,12 +53,7 @@ class RetrievalService:
 
         if normalized_subject:
             results = self._filter_by_subject(results, normalized_subject)
-
-        return self.ranker.rank(
-            query=retrieval_query,
-            items=list(results or []),
-            limit=limit,
-        )
+        return self.ranker.rank(query=retrieval_query, items=list(results or []), limit=limit)
 
     @staticmethod
     def _build_query(query: str, subject: str) -> str:
@@ -72,7 +65,6 @@ class RetrievalService:
         terms = self._subject_terms(subject)
         if not terms:
             return list(results or [])
-
         filtered = []
         for item in results or []:
             searchable = self._normalize_text(self._build_searchable_text(item))
@@ -83,9 +75,7 @@ class RetrievalService:
 
     @staticmethod
     def _required_matches(term_count: int) -> int:
-        if term_count <= 1:
-            return 1
-        return max(1, (term_count + 1) // 2)
+        return 1 if term_count <= 1 else max(1, (term_count + 1) // 2)
 
     @staticmethod
     def _build_searchable_text(item) -> str:

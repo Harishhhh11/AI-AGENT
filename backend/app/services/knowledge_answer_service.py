@@ -6,7 +6,7 @@ import re
 
 
 class KnowledgeAnswerService:
-    """Build concise customer-facing answers from retrieved knowledge."""
+    """Build useful customer-facing answers from verified knowledge."""
 
     def answer(
         self,
@@ -20,35 +20,50 @@ class KnowledgeAnswerService:
             return None
 
         if intent == "fee":
-            return self._fact_sentence(items, {"fee", "fees", "price", "pricing", "cost", "costs", "tuition"})
+            return self._fact_answer(items, {"fee", "fees", "price", "pricing", "cost", "costs", "tuition"})
         if intent == "duration":
-            return self._fact_sentence(items, {"duration", "length", "months", "weeks", "days"})
+            return self._fact_answer(items, {"duration", "length", "months", "weeks", "days"})
         if intent == "timings":
-            return self._fact_sentence(items, {"timing", "timings", "schedule", "batch", "morning", "evening"})
+            return self._fact_answer(items, {"timing", "timings", "schedule", "batch", "morning", "evening"})
         if intent == "mode":
-            return self._fact_sentence(items, {"online", "offline", "classroom", "mode"})
+            return self._fact_answer(items, {"online", "offline", "classroom", "mode"})
         if intent == "contact":
-            return self._fact_sentence(items, {"phone", "mobile", "email", "address", "location", "contact"})
-        if intent in {"details", "company_courses"} or response_style == "long":
+            return self._fact_answer(items, {"phone", "mobile", "email", "address", "location", "contact"})
+        if intent in {"details", "company_courses", "topics"} or response_style == "long":
             return self._summary(items)
         return None
 
-    def _fact_sentence(self, items: list[object], labels: set[str]) -> str | None:
+    def _fact_answer(self, items: list[object], labels: set[str]) -> str | None:
+        matches: list[str] = []
         for item in items:
-            sentences = self._sentences(str(getattr(item, "content", "") or ""))
-            matches = [sentence for sentence in sentences if any(label in sentence.lower() for label in labels)]
-            if matches:
-                return " ".join(matches[:2])
-        return None
+            title = str(getattr(item, "title", "") or "").strip()
+            content = str(getattr(item, "content", "") or "").strip()
+            sentences = self._sentences(content)
+            item_matches = [
+                sentence
+                for sentence in sentences
+                if any(re.search(rf"\b{re.escape(label)}\b", sentence.lower()) for label in labels)
+            ]
+            if item_matches:
+                prefix = f"{title}: " if title else ""
+                matches.append(prefix + " ".join(item_matches[:2]))
+            if len(matches) >= 3:
+                break
+        return " ".join(matches) if matches else None
 
     def _summary(self, items: list[object]) -> str | None:
         parts: list[str] = []
         for item in items:
             title = str(getattr(item, "title", "") or "").strip()
-            sentences = self._sentences(str(getattr(item, "content", "") or ""))
-            if not sentences:
+            content = str(getattr(item, "content", "") or "").strip()
+            if not content:
                 continue
-            parts.append(f"{title}: {sentences[0]}" if title else sentences[0])
+            # Keep a larger, coherent excerpt so list-style knowledge such as
+            # topics/courses is not reduced to only the first sentence.
+            excerpt = re.sub(r"\s+", " ", content).strip()
+            if len(excerpt) > 900:
+                excerpt = excerpt[:897].rstrip() + "..."
+            parts.append(f"{title}: {excerpt}" if title else excerpt)
             if len(parts) >= 3:
                 break
         return " ".join(parts) if parts else None

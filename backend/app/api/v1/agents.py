@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import require_permission
+from app.auth.permissions import Permission
+from app.auth.dependencies import get_current_user
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.agent import (
@@ -17,17 +19,9 @@ from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.knowledge import KnowledgeResponse
 from app.services.agent_service import AgentService
 from app.services.chat_service import ChatService
-from app.tenants.resolver import get_current_tenant
-from app.tenants.tenant_context import TenantContext
 
 
 router = APIRouter(tags=["AI Receptionists"])
-
-
-def _require_permission(user: User, permission: str) -> User:
-    """Centralize permission checks without changing the dependency contract."""
-    require_permission(user, permission)
-    return user
 
 
 def _agent_response(agent) -> AgentResponse:
@@ -44,9 +38,9 @@ def _agent_response(agent) -> AgentResponse:
 def create_agent(
     data: AgentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:create")
+    require_permission(current_user, Permission.AGENT_CREATE)
     try:
         return _agent_response(AgentService(db).create(current_user.organization_id, data))
     except ValueError as exc:
@@ -56,9 +50,9 @@ def create_agent(
 @router.get("/agents", response_model=list[AgentResponse])
 def list_agents(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:read")
+    require_permission(current_user, Permission.AGENT_READ)
     return [_agent_response(agent) for agent in AgentService(db).get_all(current_user.organization_id)]
 
 
@@ -66,9 +60,9 @@ def list_agents(
 def get_agent(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:read")
+    require_permission(current_user, Permission.AGENT_READ)
     agent = AgentService(db).get(agent_id, current_user.organization_id)
     if not agent:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
@@ -79,9 +73,9 @@ def get_agent(
 def get_agent_knowledge(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:read")
+    require_permission(current_user, Permission.AGENT_READ)
     items = AgentService(db).get_knowledge(agent_id, current_user.organization_id)
     if items is None:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
@@ -93,9 +87,9 @@ def update_agent_knowledge(
     agent_id: int,
     data: AgentKnowledgeUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:update")
+    require_permission(current_user, Permission.AGENT_UPDATE)
     try:
         agent = AgentService(db).set_knowledge(agent_id, current_user.organization_id, data.knowledge_item_ids)
     except ValueError as exc:
@@ -110,9 +104,9 @@ def update_agent(
     agent_id: int,
     data: AgentUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:update")
+    require_permission(current_user, Permission.AGENT_UPDATE)
     agent = AgentService(db).update(agent_id, current_user.organization_id, data)
     if not agent:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")
@@ -123,9 +117,9 @@ def update_agent(
 def publish_agent(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:update")
+    require_permission(current_user, Permission.AGENT_UPDATE)
     try:
         agent = AgentService(db).set_published(agent_id, current_user.organization_id, True)
     except ValueError as exc:
@@ -139,9 +133,9 @@ def publish_agent(
 def unpublish_agent(
     agent_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_tenant),
+    current_user: User = Depends(get_current_user),
 ):
-    _require_permission(current_user, "agent:update")
+    require_permission(current_user, Permission.AGENT_UPDATE)
     agent = AgentService(db).set_published(agent_id, current_user.organization_id, False)
     if not agent:
         raise HTTPException(status_code=404, detail="AI receptionist not found.")

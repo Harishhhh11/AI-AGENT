@@ -8,6 +8,7 @@ on:
       - 'feature/*'
       - 'fix/*'
       - 'agents/*'
+      - 'upgrade/*'
   pull_request:
     branches:
       - main
@@ -22,14 +23,11 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install unit-test dependencies
-        run: pip install -r requirements.txt pytest
+      - run: pip install -r requirements.txt pytest
       - name: Run unit tests
         env:
           PYTHONPATH: .
@@ -43,14 +41,11 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install integration-test dependencies
-        run: pip install -r requirements.txt pytest pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
+      - run: pip install -r requirements.txt pytest pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
       - name: Run integration tests
         env:
           PYTHONPATH: .
@@ -62,6 +57,10 @@ jobs:
           tests/test_integrations.py
           tests/test_phase5_channel_agent_integration.py
           tests/test_phase7_acceptance.py
+          tests/test_knowledge_answer_service.py
+          tests/test_chat_answer_contracts.py
+          tests/test_retrieval_guard.py
+          tests/test_conversation_subject_guard.py
 
   api-contract-tests:
     runs-on: ubuntu-latest
@@ -69,14 +68,11 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install API-test dependencies
-        run: pip install -r requirements.txt pytest httpx email-validator
+      - run: pip install -r requirements.txt pytest httpx email-validator
       - name: Run API contract tests
         env:
           PYTHONPATH: .
@@ -90,14 +86,11 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install isolation-test dependencies
-        run: pip install -r requirements.txt pytest pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
+      - run: pip install -r requirements.txt pytest pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
       - name: Run multi-tenant isolation tests
         env:
           PYTHONPATH: .
@@ -111,336 +104,17 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Node
-        uses: actions/setup-node@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install frontend dependencies
-        run: npm ci
-      - name: Build frontend regression bundle
+      - run: npm ci
+      - name: Lint frontend
+        run: npm run lint
+      - name: Build frontend
         run: npm run build
-
-  phase2-foundations:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install runtime dependencies needed by foundation tests
-        run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest
-      - name: Run Phase 2 foundation tests
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase2_foundations.py
-
-  chatservice-integration:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install integration-test dependencies
-        run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest httpx pgvector sentence-transformers
-      - name: Run ChatService integration tests
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_chatservice_integration.py
-
-  phase3-tool-execution:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install tool execution test dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 3 tool execution contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase3_tool_execution.py
-
-  phase3-recovery-multistep:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install recovery test dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 3 recovery and multistep contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase3_recovery_multistep.py
-
-  phase3-final-validation:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install final validation dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 3 final orchestration validation
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase3_final_validation.py
-
-  phase4-business-automation:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 4 test dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 4 business automation contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase4_business_automation.py
-
-  phase4-crm-integrations:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 4 CRM test dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 4 CRM integration contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase4_crm_integrations.py
-
-  phase4-provider-execution:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 4 provider test dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 4 provider execution contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase4_provider_execution.py
-
-  phase5-channels:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 5 channel test dependencies
-        run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest
-      - name: Run Phase 5 channel contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase5_channels.py
-
-  phase5-provider-adapters:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 5 provider adapter dependencies
-        run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest
-      - name: Run Phase 5 provider adapter contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase5_provider_adapters.py
-
-  phase5-channel-agent-integration:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 5 integration test dependencies
-        run: pip install fastapi pydantic pydantic-settings sqlalchemy alembic python-dotenv pytest pytest-asyncio
-      - name: Run Phase 5 channel-agent integration contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase5_channel_agent_integration.py
-
-  phase6-production-hardening:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 6 hardening test dependencies
-        run: pip install -r requirements.txt pytest httpx pgvector email-validator "pwdlib[argon2]" sentence-transformers python-docx pypdf
-      - name: Run Phase 6 production hardening contracts
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-          ENVIRONMENT: development
-          DEBUG: 'false'
-        run: pytest -q tests/test_phase6_production_hardening.py
-
-  phase6-deployment:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install deployment contract dependencies
-        run: pip install pytest pyyaml
-      - name: Run deployment contracts
-        run: pytest -q backend/tests/test_phase6_deployment.py
-      - name: Validate compose syntax
-        run: |
-          python -c "import yaml; from pathlib import Path; data = yaml.safe_load(Path('docker-compose.yml').read_text()); assert 'backend' in data['services']"
-
-  phase6-security-ops:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install security tooling
-        run: pip install pip-audit
-      - name: Audit pinned/runtime dependencies
-        run: pip-audit -r backend/requirements.txt
-      - name: Reject committed secret material
-        shell: bash
-        run: |
-          set -euo pipefail
-          if find . -type f \( -name '.env' -o -name '*.pem' -o -name '*.key' -o -name 'service-account*.json' \) -not -path './.git/*' | grep -q .; then
-            echo 'Potential secret-bearing file committed to the repository.' >&2
-            exit 1
-          fi
-          if git grep -nE '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' -- ':!*.md'; then
-            echo 'Potential private key or cloud access key material found in tracked files.' >&2
-            exit 1
-          fi
-
-  phase7-lead-acceptance:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install Phase 7 acceptance dependencies
-        run: pip install -r requirements.txt pytest-asyncio pgvector "pwdlib[argon2]" sentence-transformers
-      - name: Run Phase 7 lead acceptance tests
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: sqlite:///./ci_test.db
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest -q tests/test_phase7_acceptance.py
 
   full-suite-baseline:
     runs-on: ubuntu-latest
@@ -448,19 +122,38 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install runtime dependencies
-        run: pip install -r requirements.txt
-      - name: Install test dependencies
-        run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
+      - run: pip install -r requirements.txt
+      - run: pip install "psycopg[binary]" pgvector "pwdlib[argon2]" pytest-asyncio python-docx pypdf sentence-transformers email-validator
       - name: Run full regression suite
         env:
           PYTHONPATH: .
           DATABASE_URL: sqlite:///./ci_test.db
           SECRET_KEY: ci-test-secret-key-not-for-production
         run: pytest -q
+
+  security-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - name: Audit dependencies
+        run: pip-audit -r backend/requirements.txt
+      - name: Reject committed secret material
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find . -type f \( -name '.env' -o -name '*.pem' -o -name '*.key' -o -name 'service-account*.json' \) -not -path './.git/*' | grep -q .; then
+            echo 'Potential secret-bearing file committed to repository.' >&2
+            exit 1
+          fi
+          if git grep -nE -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' -- ':!*.md'; then
+            echo 'Potential private key or cloud access key material found.' >&2
+            exit 1
+          fi

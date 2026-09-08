@@ -17,3 +17,11 @@ def test_rank_is_deterministic_for_same_scores():
     second = SimpleNamespace(id=2, title="Beta", category="", content="python")
     result = ranker.rank(query="python", items=[first, second], limit=2)
     assert result == [second, first]
+
+
+def test_rank_uses_semantic_signal_when_lexical_scores_are_equal():
+    ranker = KnowledgeRanker()
+    first = SimpleNamespace(id=1, title="Online classes", category="training", content="Join remotely", semantic_distance=0.45)
+    second = SimpleNamespace(id=2, title="Online classes", category="training", content="Join remotely", semantic_distance=0.20)
+    result = ranker.rank(query="remote learning", items=[first, second], limit=2)
+    assert result[0] is second

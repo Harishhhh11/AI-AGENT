@@ -1,22 +1,26 @@
-"""
-Knowledge retrieval orchestration.
+"""Knowledge retrieval orchestration.
 
-Keeps retrieval company-agnostic while allowing an agent to receive
-its own knowledge plus organization-wide shared knowledge.
+Retrieves organization-scoped knowledge using both direct keyword search and
+semantic search, preserves the active agent boundary, and ranks candidates
+for answer generation.
 """
+
+from __future__ import annotations
 
 import re
 
+from app.services.knowledge_ranker import KnowledgeRanker
 from app.services.knowledge_service import KnowledgeService
 
 
 class RetrievalService:
     DEFAULT_LIMIT = 5
     MAX_LIMIT = 10
-    MIN_SUBJECT_MATCHES = 1
+    CANDIDATE_LIMIT = 12
 
     def __init__(self, knowledge_service: KnowledgeService) -> None:
         self.knowledge_service = knowledge_service
+        self.ranker = KnowledgeRanker()
 
     def retrieve(
         self,
@@ -30,59 +34,58 @@ class RetrievalService:
         if not query:
             return []
 
-        limit = max(1, min(limit, self.MAX_LIMIT))
-        normalized_subject = self._normalize_subject(subject)
-        search_query = query
+        try:
+            limit = max(1, min(int(limit or self.DEFAULT_LIMIT), self.MAX_LIMIT))
+        except (TypeError, ValueError):
+            limit = self.DEFAULT_LIMIT
 
-        if normalized_subject:
-            search_query = (
-                f"SUBJECT: {normalized_subject}\n"
-                f"QUERY: {query}"
-            )
+        normalized_subject = self._normalize_subject(subject)
+        retrieval_query = self._build_query(query, normalized_subject)
 
         try:
             results = self.knowledge_service.search(
                 organization_id=organization_id,
-                query=search_query,
-                limit=limit,
+                query=retrieval_query,
+                limit=self.CANDIDATE_LIMIT,
                 agent_id=agent_id,
             )
         except Exception as exc:
             print("Knowledge retrieval error:", exc)
             return []
 
-        if not results or not normalized_subject:
-            return results
+        if normalized_subject:
+            results = self._filter_by_subject(results, normalized_subject)
 
-        return self._filter_by_subject(results, normalized_subject)
+        return self.ranker.rank(
+            query=retrieval_query,
+            items=list(results or []),
+            limit=limit,
+        )
+
+    @staticmethod
+    def _build_query(query: str, subject: str) -> str:
+        if not subject or subject in query.lower():
+            return query
+        return f"{subject} {query}"
 
     def _filter_by_subject(self, results, subject: str):
-        subject_terms = self._subject_terms(subject)
-        if not subject_terms:
-            return []
+        terms = self._subject_terms(subject)
+        if not terms:
+            return list(results or [])
 
         filtered = []
-        for item in results:
-            text = self._normalize_text(self._build_searchable_text(item))
-
-            if subject in text:
+        for item in results or []:
+            searchable = self._normalize_text(self._build_searchable_text(item))
+            matched = sum(self._term_matches(term, searchable) for term in terms)
+            if subject in searchable or matched >= self._required_matches(len(terms)):
                 filtered.append(item)
-                continue
-
-            matches = sum(
-                1
-                for term in subject_terms
-                if self._term_matches(term, text)
-            )
-
-            if matches >= self.MIN_SUBJECT_MATCHES:
-                if len(subject_terms) >= 2:
-                    required = max(1, (len(subject_terms) + 1) // 2)
-                    if matches < required:
-                        continue
-                filtered.append(item)
-
         return filtered
+
+    @staticmethod
+    def _required_matches(term_count: int) -> int:
+        if term_count <= 1:
+            return 1
+        return max(1, (term_count + 1) // 2)
 
     @staticmethod
     def _build_searchable_text(item) -> str:
@@ -97,48 +100,28 @@ class RetrievalService:
         normalized = cls._normalize_subject(subject)
         if not normalized:
             return []
-
-        words = re.findall(r"[a-zA-Z0-9+#.-]+", normalized)
         ignored = {
-            "the", "a", "an", "course", "courses", "training",
-            "class", "classes", "program", "programs", "service",
-            "services", "technology", "technologies", "language",
-            "details", "detail", "information", "info",
+            "the", "a", "an", "course", "courses", "training", "class", "classes",
+            "program", "programs", "service", "services", "technology", "technologies",
+            "language", "details", "detail", "information", "info",
         }
-
-        terms: list[str] = []
-        for word in words:
+        terms = []
+        for word in re.findall(r"[a-zA-Z0-9+#.-]+", normalized):
             word = word.strip(".-")
-            if not word:
+            if not word or len(word) <= 1 or word in ignored or word in terms:
                 continue
-            if len(word) <= 1 and word != "c":
-                continue
-            if word in ignored:
-                continue
-            if word not in terms:
-                terms.append(word)
-
+            terms.append(word)
         return terms or [normalized]
 
     @staticmethod
     def _term_matches(term: str, text: str) -> bool:
-        term = (term or "").strip().lower()
-        text = (text or "").lower()
         if not term or not text:
             return False
-        escaped = re.escape(term)
-        return bool(
-            re.search(
-                rf"(?<![a-zA-Z0-9+#]){escaped}(?![a-zA-Z0-9+#])",
-                text,
-            )
-        )
+        return bool(re.search(rf"(?<![a-zA-Z0-9+#]){re.escape(term.lower())}(?![a-zA-Z0-9+#])", text.lower()))
 
     @staticmethod
     def _normalize_subject(subject: str | None) -> str:
-        if not subject:
-            return ""
-        return " ".join(str(subject).strip().lower().split())
+        return " ".join(str(subject or "").strip().lower().split())
 
     @staticmethod
     def _normalize_text(text: str) -> str:

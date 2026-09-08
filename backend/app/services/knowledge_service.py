@@ -16,21 +16,20 @@ class KnowledgeService:
     DEFAULT_SEARCH_LIMIT = 5
     MAX_SEARCH_LIMIT = 10
     CANDIDATE_LIMIT = 25
-    MAX_COSINE_DISTANCE = 0.62
+    MAX_COSINE_DISTANCE = 0.68
     MAX_KEYWORDS = 8
 
     STOP_WORDS = {
-        "a", "an", "and", "are", "am", "be", "can", "could", "do", "does", "did", "for", "from",
-        "how", "i", "in", "is", "it", "me", "may", "my", "of", "on", "or", "please", "tell", "the",
-        "their", "there", "this", "to", "we", "what", "when", "where", "which", "who", "why", "would",
-        "you", "your", "about", "offer", "offers", "offering", "provide", "provides", "provided", "course",
-        "courses", "class", "classes", "details", "information", "know", "want", "like", "need", "interested",
-        "give", "get", "have", "has", "had", "much", "many", "fee", "fees", "price", "pricing", "cost",
-        "costs", "training", "service", "services", "product", "products", "program", "programs", "available",
-        "availability", "online", "offline", "classroom", "mode", "duration", "timing", "timings", "schedule",
-        "topics", "topic", "covered", "cover", "syllabus", "contact", "phone", "email", "address", "location",
-        "admission", "admissions", "registration", "enrollment", "enrolment", "batch", "started", "start",
-        "everything", "complete", "full", "company", "business", "organization", "companies", "our",
+        "a", "an", "and", "are", "am", "be", "can", "could", "do", "does", "did", "for", "from", "how", "i",
+        "in", "is", "it", "me", "may", "my", "of", "on", "or", "please", "tell", "the", "their", "there",
+        "this", "to", "we", "what", "when", "where", "which", "who", "why", "would", "you", "your", "about",
+        "offer", "offers", "offering", "provide", "provides", "provided", "course", "courses", "class", "classes",
+        "details", "information", "know", "want", "like", "need", "interested", "give", "get", "have", "has", "had",
+        "much", "many", "fee", "fees", "price", "pricing", "cost", "costs", "training", "service", "services", "product",
+        "products", "program", "programs", "available", "availability", "online", "offline", "classroom", "mode", "duration",
+        "timing", "timings", "schedule", "topics", "topic", "covered", "cover", "syllabus", "contact", "phone", "email",
+        "address", "location", "admission", "admissions", "registration", "enrollment", "enrolment", "batch", "started",
+        "start", "everything", "complete", "full", "company", "business", "organization", "companies", "our",
     }
 
     def __init__(self, db: Session) -> None:
@@ -38,9 +37,14 @@ class KnowledgeService:
         self.repository = KnowledgeRepository(db)
         self.embedding_service = EmbeddingService()
 
+    @staticmethod
+    def _build_embedding_text(title: str, content: str, category: str) -> str:
+        return f"TITLE:\n{title}\n\nCATEGORY:\n{category}\n\nCONTENT:\n{content}".strip()
+
     def create(self, organization_id: int, title: str, content: str, source: str, category: str, agent_id: int | None = None) -> KnowledgeBase:
         title = (title or "").strip()
         content = (content or "").strip()
+        category = (category or "general").strip()
         if not title:
             raise ValueError("Knowledge title cannot be empty.")
         if not content:
@@ -51,21 +55,38 @@ class KnowledgeService:
             title=title,
             content=content,
             source=(source or "manual").strip(),
-            category=(category or "general").strip(),
-            embedding=self.embedding_service.generate(self._build_embedding_text(title, content, category or "general")),
+            category=category,
+            embedding=self.embedding_service.generate(self._build_embedding_text(title, content, category)),
         )
         result = self.repository.add(knowledge)
         self.db.commit()
         self.db.refresh(result)
         return result
 
-    def get_all(self, organization_id: int) -> list[KnowledgeBase]:
-        return self.repository.get_all_by_organization(organization_id)
+    def get_all(self, organization_id: int, agent_id: int | None = None, scope: str = "all") -> list[KnowledgeBase]:
+        statement = select(KnowledgeBase).where(KnowledgeBase.organization_id == organization_id).order_by(KnowledgeBase.id.desc())
+        if scope == "shared":
+            statement = statement.where(KnowledgeBase.agent_id.is_(None))
+        elif scope == "agent" and agent_id is not None:
+            statement = statement.where(KnowledgeBase.agent_id == agent_id)
+        elif scope == "available" and agent_id is not None:
+            statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
+        return list(self.db.scalars(statement).all())
 
     def get_by_id(self, knowledge_id: int, organization_id: int) -> KnowledgeBase | None:
         return self.repository.get_by_id_in_organization(knowledge_id, organization_id)
 
-    def update(self, knowledge_id: int, organization_id: int, title: str | None = None, content: str | None = None, source: str | None = None, category: str | None = None, is_active: bool | None = None) -> KnowledgeBase | None:
+    def update(
+        self,
+        knowledge_id: int,
+        organization_id: int,
+        title: str | None = None,
+        content: str | None = None,
+        source: str | None = None,
+        category: str | None = None,
+        agent_id: int | None = None,
+        is_active: bool | None = None,
+    ) -> KnowledgeBase | None:
         knowledge = self.get_by_id(knowledge_id, organization_id)
         if knowledge is None:
             return None
@@ -81,10 +102,27 @@ class KnowledgeService:
         knowledge.category = final_category
         if source is not None:
             knowledge.source = source.strip()
+        if agent_id is not None:
+            knowledge.agent_id = agent_id
+        elif "agent_id" in {"agent_id"} and agent_id is None:
+            # Explicit null is needed to return an item to shared scope. The API
+            # passes a sentinel through the service for this operation below.
+            pass
         if is_active is not None:
             knowledge.is_active = is_active
         if title is not None or content is not None or category is not None:
-            knowledge.embedding = self.embedding_service.generate(self._build_embedding_text(final_title, final_content, final_category))
+            knowledge.embedding = self.embedding_service.generate(
+                self._build_embedding_text(final_title, final_content, final_category)
+            )
+        self.db.commit()
+        self.db.refresh(knowledge)
+        return knowledge
+
+    def reassign(self, knowledge_id: int, organization_id: int, agent_id: int | None) -> KnowledgeBase | None:
+        knowledge = self.get_by_id(knowledge_id, organization_id)
+        if knowledge is None:
+            return None
+        knowledge.agent_id = agent_id
         self.db.commit()
         self.db.refresh(knowledge)
         return knowledge
@@ -118,13 +156,10 @@ class KnowledgeService:
         keywords = self._extract_keywords(query)
         lexical = self._keyword_search(organization_id, agent_id, keywords, self.CANDIDATE_LIMIT)
         semantic = self._semantic_search(organization_id, agent_id, query, self.CANDIDATE_LIMIT)
-
         by_id: dict[int, KnowledgeBase] = {}
         for item in lexical + semantic:
-            item_id = getattr(item, "id", None)
-            if item_id is not None:
-                by_id[item_id] = item
-
+            if getattr(item, "id", None) is not None:
+                by_id[item.id] = item
         candidates = list(by_id.values())
         if not candidates:
             return []
@@ -132,17 +167,19 @@ class KnowledgeService:
         q_terms = set(keywords)
         normalized_query = self._normalize_text(query)
 
-        def score(item: KnowledgeBase) -> tuple[float, int]:
+        def score(item: KnowledgeBase) -> tuple[float, float, int]:
             title = self._normalize_text(item.title)
             category = self._normalize_text(item.category)
             content = self._normalize_text(item.content)
             all_text = f"{title} {category} {content}"
             matched = len([term for term in q_terms if self._term_in_text(term, all_text)])
             title_hits = len([term for term in q_terms if self._term_in_text(term, title)])
-            phrase = 0.15 if normalized_query and normalized_query in all_text else 0.0
+            phrase = 0.20 if normalized_query and normalized_query in all_text else 0.0
             lexical_score = (matched / len(q_terms)) if q_terms else 0.0
             title_score = (title_hits / len(q_terms)) if q_terms else 0.0
-            return (0.60 * lexical_score + 0.25 * title_score + phrase, -(item.id or 0))
+            distance = getattr(item, "semantic_distance", None)
+            semantic_score = max(0.0, min(1.0, 1.0 - float(distance))) if distance is not None else 0.0
+            return (0.50 * lexical_score + 0.20 * title_score + phrase + 0.30 * semantic_score, semantic_score, -(item.id or 0))
 
         candidates.sort(key=score, reverse=True)
         return candidates[:limit]
@@ -188,7 +225,6 @@ class KnowledgeService:
         except Exception as exc:
             print("Semantic knowledge search error:", exc)
             return []
-
         relevant: list[KnowledgeBase] = []
         for knowledge, raw_distance in rows:
             try:
@@ -218,7 +254,3 @@ class KnowledgeService:
     @staticmethod
     def _normalize_text(text: str) -> str:
         return " ".join(str(text or "").lower().split())
-
-    @staticmethod
-    def _build_embedding_text(title: str, content: str, category: str) -> str:
-        return f"TITLE:\n{title}\n\nCATEGORY:\n{category}\n\nCONTENT:\n{content}".strip()

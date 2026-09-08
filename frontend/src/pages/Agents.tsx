@@ -21,13 +21,24 @@ export default function Agents() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  async function loadAgents() {
+    setError("");
+    const data = await getAgents();
+    setAgents(data);
+  }
+
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
     void getAgents()
-      .then((data) => mounted && setAgents(data))
-      .catch((reason) => mounted && setError(reason instanceof Error ? reason.message : "Unable to load receptionists."))
-      .finally(() => mounted && setLoading(false));
+      .then((data) => {
+        if (mounted) setAgents(data);
+      })
+      .catch((reason) => {
+        if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load receptionists.");
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
     return () => { mounted = false; };
   }, []);
 
@@ -43,29 +54,55 @@ export default function Agents() {
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSaving(true); setError("");
+    setSaving(true);
+    setError("");
     try {
-      const agent = await createAgent({ ...form, name: form.name.trim(), public_slug: form.public_slug.trim(), welcome_message: form.welcome_message.trim() });
+      const agent = await createAgent({
+        ...form,
+        name: form.name.trim(),
+        public_slug: form.public_slug.trim(),
+        welcome_message: form.welcome_message.trim(),
+      });
       setAgents((current) => [agent, ...current]);
-      setForm(EMPTY); setOpen(false);
+      setForm(EMPTY);
+      setOpen(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to create receptionist.");
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function togglePublish(agent: Agent) {
-    setSaving(true); setError("");
+    setSaving(true);
+    setError("");
     try {
       const updated = agent.is_published ? await unpublishAgent(agent.id) : await publishAgent(agent.id);
       setAgents((items) => items.map((item) => item.id === updated.id ? updated : item));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to update receptionist.");
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function copy(url: string) {
-    try { await navigator.clipboard.writeText(url); }
-    catch { setError("Could not copy the link. Select and copy it manually."); }
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      setError("Could not copy the link. Select and copy it manually.");
+    }
+  }
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      await loadAgents();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to refresh receptionists.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -74,7 +111,12 @@ export default function Agents() {
         eyebrow="Multi-agent workspace"
         title="AI Receptionists"
         description="Create, configure, publish and test dedicated customer-facing assistants without mixing their knowledge boundaries."
-        actions={<button type="button" onClick={() => setOpen(true)} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700">+ Create receptionist</button>}
+        actions={(
+          <>
+            <button type="button" onClick={() => void refresh()} disabled={loading} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:border-indigo-200 hover:text-indigo-700 disabled:opacity-50">Refresh</button>
+            <button type="button" onClick={() => setOpen(true)} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700">+ Create receptionist</button>
+          </>
+        )}
       />
 
       <div className="grid gap-4 sm:grid-cols-3">

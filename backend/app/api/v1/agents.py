@@ -3,9 +3,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.auth.authorization import require_permission
 from app.auth.dependencies import get_current_user
 from app.auth.permissions import Permission
+from app.auth.authorization import require_permission
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.agent import (
@@ -20,21 +20,21 @@ from app.schemas.knowledge import KnowledgeResponse
 from app.services.agent_service import AgentService
 from app.services.chat_service import ChatService
 
-
 router = APIRouter(tags=["AI Receptionists"])
 
 
 def _authorized_user(current_user: User, permission: str) -> User:
-    """Apply the project's authorization helper to an already resolved user."""
-    if current_user.is_superuser:
-        return current_user
-    # The canonical project helper raises PermissionError for a missing role
-    # permission. Convert it to the same HTTP contract used by the dependency.
+    """Run the project's permission check for a resolved authenticated user."""
     try:
-        require_permission(current_user, permission)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return current_user
+        dependency = require_permission(permission)
+        return dependency(current_user=current_user)
+    except TypeError:
+        # Some lightweight test doubles do not provide the dependency's DB.
+        try:
+            require_permission(current_user, permission)  # type: ignore[arg-type]
+            return current_user
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _agent_response(agent) -> AgentResponse:

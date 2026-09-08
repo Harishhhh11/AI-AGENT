@@ -1,28 +1,10 @@
-"""
-Knowledge base service.
-
-Handles:
-
-- Creating knowledge
-- Updating knowledge
-- Deleting knowledge
-- Retrieving knowledge
-- Organization-scoped semantic search
-- Keyword/exact-match retrieval
-- Relevance filtering
-
-Knowledge is always restricted to the current organization and, when supplied,
-the active receptionist. Retrieval is hybrid: lexical matches provide precise
-subject control and semantic search handles natural-language paraphrases.
-"""
+"""Knowledge base service with organization/agent-scoped hybrid retrieval."""
 
 from __future__ import annotations
 
 import re
 
-from sqlalchemy import func
-from sqlalchemy import or_
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.knowledge_base import KnowledgeBase
@@ -44,13 +26,13 @@ class KnowledgeService:
         "when", "where", "which", "who", "why", "would", "you", "your", "about", "offer",
         "offers", "offering", "provide", "provides", "provided", "course", "courses", "class",
         "classes", "details", "information", "know", "want", "like", "need", "interested",
-        "give", "get", "have", "has", "had", "much", "many", "fee", "fees", "price",
-        "pricing", "cost", "costs", "training", "service", "services", "product", "products",
-        "program", "programs", "available", "availability", "online", "offline", "classroom",
-        "mode", "duration", "timing", "timings", "schedule", "topics", "topic", "covered",
-        "cover", "syllabus", "contact", "phone", "email", "address", "location", "admission",
-        "admissions", "registration", "enrollment", "enrolment", "batch", "started", "start",
-        "everything", "complete", "full", "company", "business", "organization",
+        "give", "get", "have", "has", "had", "much", "many", "fee", "fees", "price", "pricing",
+        "cost", "costs", "training", "service", "services", "product", "products", "program",
+        "programs", "available", "availability", "online", "offline", "classroom", "mode",
+        "duration", "timing", "timings", "schedule", "topics", "topic", "covered", "cover",
+        "syllabus", "contact", "phone", "email", "address", "location", "admission", "admissions",
+        "registration", "enrollment", "enrolment", "batch", "started", "start", "everything",
+        "complete", "full", "company", "business", "organization", "about",
     }
 
     def __init__(self, db: Session) -> None:
@@ -75,9 +57,6 @@ class KnowledgeService:
             raise ValueError("Knowledge title cannot be empty.")
         if not content:
             raise ValueError("Knowledge content cannot be empty.")
-        embedding = self.embedding_service.generate(
-            self._build_embedding_text(title, content, category)
-        )
         knowledge = KnowledgeBase(
             organization_id=organization_id,
             agent_id=agent_id,
@@ -85,7 +64,7 @@ class KnowledgeService:
             content=content,
             source=source,
             category=category,
-            embedding=embedding,
+            embedding=self.embedding_service.generate(self._build_embedding_text(title, content, category)),
         )
         result = self.repository.add(knowledge)
         self.db.commit()
@@ -167,10 +146,23 @@ class KnowledgeService:
 
         keywords = self._extract_keywords(query)
         keyword_results = self._keyword_search(organization_id, agent_id, keywords, self.CANDIDATE_LIMIT)
-        if keyword_results:
-            return self._rank_keyword_results(query, keyword_results, limit)
 
-        return self._semantic_search(organization_id, agent_id, query, limit)
+        # A keyword hit is useful but does not prove that the hit is the right
+        # answer. Merge semantic candidates as well so paraphrases and related
+        # wording still have a chance to surface the best record.
+        semantic_results = self._semantic_search(organization_id, agent_id, query, self.CANDIDATE_LIMIT)
+
+        merged: dict[int, KnowledgeBase] = {}
+        for item in [*keyword_results, *semantic_results]:
+            item_id = getattr(item, "id", None)
+            if item_id is None:
+                item_id = id(item)
+            merged[item_id] = item
+
+        candidates = list(merged.values())
+        if not candidates:
+            return []
+        return self._rank_hybrid_candidates(query, candidates, limit)
 
     def _keyword_search(
         self,
@@ -200,31 +192,12 @@ class KnowledgeService:
             .limit(limit)
         )
         if agent_id is not None:
-            statement = statement.where(
-                or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id)
-            )
+            statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
         try:
             return list(self.db.scalars(statement).all())
         except Exception as exc:
             print("Keyword knowledge search error:", exc)
             return []
-
-    def _rank_keyword_results(self, query: str, results: list[KnowledgeBase], limit: int) -> list[KnowledgeBase]:
-        query_terms = [term for term in self._extract_keywords(query) if term not in self.STOP_WORDS]
-
-        def score(item: KnowledgeBase) -> tuple[float, int]:
-            title = self._normalize_text(item.title)
-            content = self._normalize_text(item.content)
-            category = self._normalize_text(item.category)
-            if not query_terms:
-                value = 0.0
-            else:
-                matched = sum(1 for term in query_terms if self._term_in_text(term, title + " " + content + " " + category))
-                title_hits = sum(1 for term in query_terms if self._term_in_text(term, title))
-                value = (matched / len(query_terms)) + (0.5 * title_hits / len(query_terms))
-            return value, -(item.id or 0)
-
-        return sorted(results, key=score, reverse=True)[:limit]
 
     def _semantic_search(
         self,
@@ -245,18 +218,15 @@ class KnowledgeService:
             .where(KnowledgeBase.is_active.is_(True))
             .where(KnowledgeBase.embedding.is_not(None))
             .order_by(distance.asc())
-            .limit(self.CANDIDATE_LIMIT)
+            .limit(limit)
         )
         if agent_id is not None:
-            statement = statement.where(
-                or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id)
-            )
+            statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
         try:
             rows = self.db.execute(statement).all()
         except Exception as exc:
             print("Semantic knowledge search error:", exc)
             return []
-
         relevant = []
         for knowledge, raw_distance in rows:
             try:
@@ -264,10 +234,41 @@ class KnowledgeService:
             except (TypeError, ValueError):
                 continue
             if similarity_distance <= self.MAX_COSINE_DISTANCE:
+                # Preserve the distance for downstream rankers/grounding.
+                try:
+                    setattr(knowledge, "semantic_distance", similarity_distance)
+                except Exception:
+                    pass
                 relevant.append(knowledge)
-            if len(relevant) >= limit:
-                break
         return relevant
+
+    def _rank_hybrid_candidates(
+        self,
+        query: str,
+        items: list[KnowledgeBase],
+        limit: int,
+    ) -> list[KnowledgeBase]:
+        query_terms = set(self._extract_keywords(query))
+
+        def score(item: KnowledgeBase) -> tuple[float, int, str]:
+            title = self._normalize_text(item.title)
+            category = self._normalize_text(item.category)
+            content = self._normalize_text(item.content)
+            corpus = f"{title} {category} {content}"
+            matched = sum(1 for term in query_terms if self._term_in_text(term, corpus))
+            title_hits = sum(1 for term in query_terms if self._term_in_text(term, title))
+            lexical = (matched / len(query_terms)) if query_terms else 0.0
+            title_bonus = 0.25 * (title_hits / len(query_terms)) if query_terms else 0.0
+            semantic_distance = getattr(item, "semantic_distance", None)
+            try:
+                semantic = max(0.0, min(1.0, 1.0 - float(semantic_distance))) if semantic_distance is not None else 0.0
+            except (TypeError, ValueError):
+                semantic = 0.0
+            hybrid = max(0.0, min(1.0, 0.60 * lexical + title_bonus + 0.15 * semantic))
+            return hybrid, -(getattr(item, "id", 0) or 0), title
+
+        ranked = sorted(items, key=score, reverse=True)
+        return ranked[:limit]
 
     @classmethod
     def _extract_keywords(cls, query: str) -> list[str]:

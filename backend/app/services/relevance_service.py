@@ -45,8 +45,6 @@ class RelevanceService:
         lexical = min(1.0, 0.65 * coverage + 0.25 * title_coverage + phrase_bonus)
         semantic = self._semantic_score(semantic_distance)
         combined = max(lexical, 0.72 * lexical + 0.28 * semantic)
-        # Semantic similarity can help paraphrases only after a subject signal
-        # exists; unrelated records must never become grounded by similarity alone.
         accepted = bool(matched) and (lexical >= self.STRONG_LEXICAL_SCORE or combined >= self.MIN_ACCEPT_SCORE)
         return RelevanceResult(
             lexical_score=round(lexical, 4),
@@ -56,6 +54,10 @@ class RelevanceService:
             query_terms=tuple(sorted(query_terms)),
             matched_terms=matched,
         )
+
+    @classmethod
+    def has_meaningful_terms(cls, value: str) -> bool:
+        return bool(cls._meaningful_terms(value))
 
     @classmethod
     def _meaningful_terms(cls, value: str) -> set[str]:

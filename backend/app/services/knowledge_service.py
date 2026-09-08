@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -10,6 +11,9 @@ from sqlalchemy.orm import Session
 from app.models.knowledge_base import KnowledgeBase
 from app.repositories.knowledge_repository import KnowledgeRepository
 from app.services.embedding_service import EmbeddingService
+
+
+_UNSET = object()
 
 
 class KnowledgeService:
@@ -41,7 +45,15 @@ class KnowledgeService:
     def _build_embedding_text(title: str, content: str, category: str) -> str:
         return f"TITLE:\n{title}\n\nCATEGORY:\n{category}\n\nCONTENT:\n{content}".strip()
 
-    def create(self, organization_id: int, title: str, content: str, source: str, category: str, agent_id: int | None = None) -> KnowledgeBase:
+    def create(
+        self,
+        organization_id: int,
+        title: str,
+        content: str,
+        source: str,
+        category: str,
+        agent_id: int | None = None,
+    ) -> KnowledgeBase:
         title = (title or "").strip()
         content = (content or "").strip()
         category = (category or "general").strip()
@@ -67,9 +79,13 @@ class KnowledgeService:
         statement = select(KnowledgeBase).where(KnowledgeBase.organization_id == organization_id).order_by(KnowledgeBase.id.desc())
         if scope == "shared":
             statement = statement.where(KnowledgeBase.agent_id.is_(None))
-        elif scope == "agent" and agent_id is not None:
+        elif scope == "agent":
+            if agent_id is None:
+                raise ValueError("agent_id is required for agent scope.")
             statement = statement.where(KnowledgeBase.agent_id == agent_id)
-        elif scope == "available" and agent_id is not None:
+        elif scope == "available":
+            if agent_id is None:
+                raise ValueError("agent_id is required for available scope.")
             statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
         return list(self.db.scalars(statement).all())
 
@@ -84,7 +100,7 @@ class KnowledgeService:
         content: str | None = None,
         source: str | None = None,
         category: str | None = None,
-        agent_id: int | None = None,
+        agent_id: Any = _UNSET,
         is_active: bool | None = None,
     ) -> KnowledgeBase | None:
         knowledge = self.get_by_id(knowledge_id, organization_id)
@@ -97,32 +113,21 @@ class KnowledgeService:
             raise ValueError("Knowledge title cannot be empty.")
         if not final_content:
             raise ValueError("Knowledge content cannot be empty.")
+
         knowledge.title = final_title
         knowledge.content = final_content
         knowledge.category = final_category
         if source is not None:
             knowledge.source = source.strip()
-        if agent_id is not None:
+        if agent_id is not _UNSET:
             knowledge.agent_id = agent_id
-        elif "agent_id" in {"agent_id"} and agent_id is None:
-            # Explicit null is needed to return an item to shared scope. The API
-            # passes a sentinel through the service for this operation below.
-            pass
         if is_active is not None:
             knowledge.is_active = is_active
         if title is not None or content is not None or category is not None:
             knowledge.embedding = self.embedding_service.generate(
                 self._build_embedding_text(final_title, final_content, final_category)
             )
-        self.db.commit()
-        self.db.refresh(knowledge)
-        return knowledge
 
-    def reassign(self, knowledge_id: int, organization_id: int, agent_id: int | None) -> KnowledgeBase | None:
-        knowledge = self.get_by_id(knowledge_id, organization_id)
-        if knowledge is None:
-            return None
-        knowledge.agent_id = agent_id
         self.db.commit()
         self.db.refresh(knowledge)
         return knowledge
@@ -178,8 +183,12 @@ class KnowledgeService:
             lexical_score = (matched / len(q_terms)) if q_terms else 0.0
             title_score = (title_hits / len(q_terms)) if q_terms else 0.0
             distance = getattr(item, "semantic_distance", None)
-            semantic_score = max(0.0, min(1.0, 1.0 - float(distance))) if distance is not None else 0.0
-            return (0.50 * lexical_score + 0.20 * title_score + phrase + 0.30 * semantic_score, semantic_score, -(item.id or 0))
+            try:
+                semantic_score = max(0.0, min(1.0, 1.0 - float(distance))) if distance is not None else 0.0
+            except (TypeError, ValueError):
+                semantic_score = 0.0
+            combined = 0.50 * lexical_score + 0.20 * title_score + phrase + 0.30 * semantic_score
+            return (combined, semantic_score, -(item.id or 0))
 
         candidates.sort(key=score, reverse=True)
         return candidates[:limit]

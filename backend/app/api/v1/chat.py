@@ -22,7 +22,6 @@ async def chat(
 ):
     agent_id = request.agent_id
     agent_instructions = None
-
     if agent_id is not None:
         agent = AgentService(db).get(agent_id, tenant.organization_id)
         if not agent or not agent.is_active:
@@ -37,5 +36,4 @@ async def chat(
         agent_id=agent_id,
         agent_instructions=agent_instructions,
     )
-
     return ChatResponse(session_id=session_id, response=response)

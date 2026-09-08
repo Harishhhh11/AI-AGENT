@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from app.services.conversation_guard import ConversationGuard
 from app.services.knowledge_ranker import KnowledgeRanker
 from app.services.knowledge_service import KnowledgeService
 
@@ -45,31 +46,32 @@ class RetrievalService:
 
     @staticmethod
     def _build_query(query: str, subject: str) -> str:
-        return query if not subject or subject in query.lower() else f"{subject} {query}"
+        normalized_query = (query or "").lower()
+        return query if not subject or subject in normalized_query else f"{subject} {query}"
 
     def _filter_by_subject(self, results, subject: str):
-        terms = self._subject_terms(subject)
-        if not terms:
-            return []
-        filtered = []
-        for item in results or []:
-            searchable = self._normalize_text(self._build_searchable_text(item))
-            matched = sum(self._term_matches(term, searchable) for term in terms)
-            required = 1 if len(terms) <= 1 else max(1, (len(terms) + 1) // 2)
-            if subject in searchable or matched >= required:
-                filtered.append(item)
-        return filtered
+        return [item for item in (results or []) if ConversationGuard.matches_subject(subject, item)]
 
     @staticmethod
     def _build_searchable_text(item) -> str:
-        return " ".join((str(getattr(item, "title", "") or ""), str(getattr(item, "category", "") or ""), str(getattr(item, "content", "") or "")))
+        return " ".join(
+            (
+                str(getattr(item, "title", "") or ""),
+                str(getattr(item, "category", "") or ""),
+                str(getattr(item, "content", "") or ""),
+            )
+        )
 
     @classmethod
     def _subject_terms(cls, subject: str) -> list[str]:
         normalized = cls._normalize_subject(subject)
         if not normalized:
             return []
-        ignored = {"the", "a", "an", "course", "courses", "training", "class", "classes", "program", "programs", "service", "services", "technology", "technologies", "language", "details", "detail", "information", "info"}
+        ignored = {
+            "the", "a", "an", "course", "courses", "training", "class", "classes",
+            "program", "programs", "service", "services", "technology", "technologies",
+            "language", "details", "detail", "information", "info",
+        }
         terms = []
         for word in re.findall(r"[a-zA-Z0-9+#.-]+", normalized):
             word = word.strip(".-")

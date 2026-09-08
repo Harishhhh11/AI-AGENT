@@ -1,6 +1,6 @@
 """Document upload API."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
@@ -17,8 +17,8 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    category: str = "general",
-    agent_id: int | None = None,
+    category: str = Form("general"),
+    agent_id: int | None = Form(None),
     db: Session = Depends(get_db),
     tenant: TenantContext = Depends(get_current_tenant),
 ):
@@ -48,12 +48,6 @@ async def upload_document(
             "uuid": str(knowledge.uuid),
             "agent_id": knowledge.agent_id,
             "chunks_created": 1,
-            "chunks": [
-                {
-                    "id": knowledge.id,
-                    "title": knowledge.title,
-                    "uuid": str(knowledge.uuid),
-                }
-            ],
+            "chunks": [{"id": knowledge.id, "title": knowledge.title, "uuid": str(knowledge.uuid)}],
         },
     }

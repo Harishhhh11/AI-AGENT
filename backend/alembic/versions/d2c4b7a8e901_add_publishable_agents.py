@@ -18,6 +18,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    dialect_name = op.get_bind().dialect.name
+    recreate = "always" if dialect_name == "sqlite" else "auto"
+
     op.create_table(
         "agents",
         sa.Column("organization_id", sa.Integer(), nullable=False),
@@ -29,8 +32,8 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("uuid", sa.UUID(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("public_slug"),
@@ -43,25 +46,27 @@ def upgrade() -> None:
 
     # Nullable columns preserve all existing organization-level data. New
     # public conversations receive agent_id through ConversationService.
-    op.add_column("conversations", sa.Column("agent_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_conversations_agent_id_agents",
-        "conversations",
-        "agents",
-        ["agent_id"], ["id"],
-        ondelete="SET NULL",
-    )
+    with op.batch_alter_table("conversations", recreate=recreate) as batch_op:
+        batch_op.add_column(sa.Column("agent_id", sa.Integer(), nullable=True))
+        batch_op.create_foreign_key(
+            "fk_conversations_agent_id_agents",
+            "agents",
+            ["agent_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
     op.create_index(op.f("ix_conversations_agent_id"), "conversations", ["agent_id"], unique=False)
 
     # NULL knowledge remains shared by every receptionist in the company.
-    op.add_column("knowledge_base", sa.Column("agent_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_knowledge_base_agent_id_agents",
-        "knowledge_base",
-        "agents",
-        ["agent_id"], ["id"],
-        ondelete="CASCADE",
-    )
+    with op.batch_alter_table("knowledge_base", recreate=recreate) as batch_op:
+        batch_op.add_column(sa.Column("agent_id", sa.Integer(), nullable=True))
+        batch_op.create_foreign_key(
+            "fk_knowledge_base_agent_id_agents",
+            "agents",
+            ["agent_id"],
+            ["id"],
+            ondelete="CASCADE",
+        )
     op.create_index(op.f("ix_knowledge_base_agent_id"), "knowledge_base", ["agent_id"], unique=False)
 
 

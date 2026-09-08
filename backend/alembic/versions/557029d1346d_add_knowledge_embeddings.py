@@ -11,6 +11,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 import pgvector
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -22,19 +23,24 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    bind = op.get_bind()
+    existing_columns = {
+        column["name"] for column in inspect(bind).get_columns("knowledge_base")
+    }
 
     # ---------------------------------------------------------
     # 1. Add embedding column
     # ---------------------------------------------------------
 
-    op.add_column(
-        "knowledge_base",
-        sa.Column(
-            "embedding",
-            pgvector.sqlalchemy.vector.VECTOR(dim=384),
-            nullable=True,
-        ),
-    )
+    if "embedding" not in existing_columns:
+        op.add_column(
+            "knowledge_base",
+            sa.Column(
+                "embedding",
+                pgvector.sqlalchemy.vector.VECTOR(dim=384),
+                nullable=True,
+            ),
+        )
 
     # ---------------------------------------------------------
     # 2. Add UUID column safely
@@ -43,30 +49,47 @@ def upgrade() -> None:
     # UUID cannot initially be NOT NULL.
     # ---------------------------------------------------------
 
-    op.add_column(
-        "knowledge_base",
-        sa.Column(
-            "uuid",
-            sa.UUID(),
-            nullable=True,
-        ),
-    )
+    if "uuid" not in existing_columns:
+        op.add_column(
+            "knowledge_base",
+            sa.Column(
+                "uuid",
+                sa.UUID(),
+                nullable=True,
+            ),
+        )
 
-    # Generate UUID values for existing rows.
-    op.execute(
-        """
-        UPDATE knowledge_base
-        SET uuid = gen_random_uuid()
-        WHERE uuid IS NULL
-        """
-    )
+    # Generate UUID values for existing rows. SQLite does not provide
+    # PostgreSQL's gen_random_uuid(), so use its random blob function locally.
+    dialect_name = bind.dialect.name
+    if dialect_name == "sqlite":
+        op.execute(
+            """
+            UPDATE knowledge_base
+            SET uuid = lower(hex(randomblob(16)))
+            WHERE uuid IS NULL
+            """
+        )
+    elif dialect_name == "postgresql":
+        op.execute(
+            """
+            UPDATE knowledge_base
+            SET uuid = gen_random_uuid()
+            WHERE uuid IS NULL
+            """
+        )
+    else:
+        raise RuntimeError(
+            f"Unsupported database dialect for UUID backfill: {dialect_name}"
+        )
 
     # UUID is now populated for existing rows.
-    op.alter_column(
-        "knowledge_base",
-        "uuid",
-        nullable=False,
-    )
+    if dialect_name != "sqlite":
+        op.alter_column(
+            "knowledge_base",
+            "uuid",
+            nullable=False,
+        )
 
     # ---------------------------------------------------------
     # 3. Add is_active safely
@@ -74,14 +97,15 @@ def upgrade() -> None:
     # Existing rows need a value before NOT NULL is applied.
     # ---------------------------------------------------------
 
-    op.add_column(
-        "knowledge_base",
-        sa.Column(
-            "is_active",
-            sa.Boolean(),
-            nullable=True,
-        ),
-    )
+    if "is_active" not in existing_columns:
+        op.add_column(
+            "knowledge_base",
+            sa.Column(
+                "is_active",
+                sa.Boolean(),
+                nullable=True,
+            ),
+        )
 
     # Existing knowledge records should be active.
     op.execute(
@@ -92,22 +116,27 @@ def upgrade() -> None:
         """
     )
 
-    op.alter_column(
-        "knowledge_base",
-        "is_active",
-        nullable=False,
-    )
+    if dialect_name != "sqlite":
+        op.alter_column(
+            "knowledge_base",
+            "is_active",
+            nullable=False,
+        )
 
     # ---------------------------------------------------------
     # 4. UUID index
     # ---------------------------------------------------------
 
-    op.create_index(
-        op.f("ix_knowledge_base_uuid"),
-        "knowledge_base",
-        ["uuid"],
-        unique=True,
-    )
+    existing_indexes = {
+        index["name"] for index in inspect(bind).get_indexes("knowledge_base")
+    }
+    if "ix_knowledge_base_uuid" not in existing_indexes:
+        op.create_index(
+            op.f("ix_knowledge_base_uuid"),
+            "knowledge_base",
+            ["uuid"],
+            unique=True,
+        )
 
 
 def downgrade() -> None:

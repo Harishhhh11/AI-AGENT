@@ -21,9 +21,10 @@ class KnowledgeAnswerService:
         if not items:
             return None
         if intent == "duration_and_timings":
-            duration = self._fact_answer(items, self.FACT_LABELS["duration"])
-            timings = self._fact_answer(items, self.FACT_LABELS["timings"])
-            return self._join_answers(duration, timings)
+            return self._join_answers(
+                self._fact_answer(items, self.FACT_LABELS["duration"]),
+                self._fact_answer(items, self.FACT_LABELS["timings"]),
+            )
         if intent in self.FACT_LABELS:
             return self._fact_answer(items, self.FACT_LABELS[intent])
         if intent in {"details", "company_courses", "topics", "availability", "company_information"} or response_style == "long":
@@ -35,26 +36,21 @@ class KnowledgeAnswerService:
         seen: set[str] = set()
         for item in items:
             title = self._clean(getattr(item, "title", ""))
-            content = self._clean(getattr(item, "content", ""))
+            content = self._clean_preserve_lines(getattr(item, "content", ""))
             if not content:
                 continue
-            sentences = self._sentences(content)
-            matching = [sentence for sentence in sentences if self._contains_fact(sentence, labels)]
-            if not matching:
-                # Knowledge uploads are not required to use sentence punctuation.
-                # If the whole item is short and directly contains the requested
-                # fact vocabulary, keep it grounded rather than returning a false miss.
-                if self._contains_fact(content, labels):
-                    matching = [content]
-            if matching:
-                unique = []
-                for sentence in matching[:3]:
-                    normalized = sentence.lower()
-                    if normalized not in seen:
-                        seen.add(normalized)
-                        unique.append(sentence)
-                if unique:
-                    answers.append(f"{title}: {' '.join(unique)}" if title else " ".join(unique))
+            pieces = self._pieces(content)
+            matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
+            if not matching and self._contains_fact(content, labels):
+                matching = [content]
+            unique: list[str] = []
+            for piece in matching[:4]:
+                normalized = self._clean(piece).lower()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    unique.append(self._clean(piece))
+            if unique:
+                answers.append(f"{title}: {' '.join(unique)}" if title else " ".join(unique))
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
@@ -65,7 +61,7 @@ class KnowledgeAnswerService:
         used = 0
         for item in items:
             title = self._clean(getattr(item, "title", ""))
-            content = self._clean(getattr(item, "content", ""))
+            content = self._clean_preserve_lines(getattr(item, "content", ""))
             if not content:
                 continue
             remaining = max_chars - used
@@ -73,10 +69,7 @@ class KnowledgeAnswerService:
                 break
             excerpt = content if len(content) <= remaining else content[: max(0, remaining - 3)].rstrip() + "..."
             block = f"{title}: {excerpt}" if title else excerpt
-            if company_wide:
-                parts.append(f"• {block}")
-            else:
-                parts.append(block)
+            parts.append(f"• {block}" if company_wide else block)
             used += len(block) + 2
             if len(parts) >= 6:
                 break
@@ -89,7 +82,10 @@ class KnowledgeAnswerService:
     @staticmethod
     def _contains_fact(text: str, labels: set[str]) -> bool:
         normalized = (text or "").lower()
-        return any(re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized) for label in labels)
+        return any(
+            re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized)
+            for label in labels
+        )
 
     @staticmethod
     def _join_answers(first: str | None, second: str | None) -> str | None:
@@ -97,9 +93,13 @@ class KnowledgeAnswerService:
         return " ".join(values) if values else None
 
     @staticmethod
-    def _sentences(text: str) -> list[str]:
-        return [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    def _pieces(text: str) -> list[str]:
+        return [part.strip(" •\t") for part in re.split(r"(?<=[.!?])\s+|\r?\n+|\s+(?=•\s+)|\s+(?=-\s+)", text) if part.strip()]
 
     @staticmethod
     def _clean(value: object) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    @staticmethod
+    def _clean_preserve_lines(value: object) -> str:
+        return re.sub(r"[ \t]+", " ", str(value or "")).strip()

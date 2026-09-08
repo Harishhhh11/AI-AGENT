@@ -1,0 +1,212 @@
+[1mdiff --git a/backend/alembic/versions/557029d1346d_add_knowledge_embeddings.py b/backend/alembic/versions/557029d1346d_add_knowledge_embeddings.py[m
+[1mindex d5825e4..30aadc5 100644[m
+[1m--- a/backend/alembic/versions/557029d1346d_add_knowledge_embeddings.py[m
+[1m+++ b/backend/alembic/versions/557029d1346d_add_knowledge_embeddings.py[m
+[36m@@ -3,134 +3,99 @@[m
+ Revision ID: 557029d1346d[m
+ Revises: c557a58d62e0[m
+ Create Date: 2026-08-15 19:55:41.799733[m
+[31m-[m
+ """[m
+ [m
+ from typing import Sequence, Union[m
+[32m+[m[32mfrom uuid import uuid4[m
+ [m
+ from alembic import op[m
+ import sqlalchemy as sa[m
+ import pgvector[m
+ [m
+ [m
+[31m-# revision identifiers, used by Alembic.[m
+ revision: str = "557029d1346d"[m
+ down_revision: Union[str, Sequence[str], None] = "c557a58d62e0"[m
+ branch_labels: Union[str, Sequence[str], None] = None[m
+ depends_on: Union[str, Sequence[str], None] = None[m
+ [m
+ [m
+[31m-def upgrade() -> None:[m
+[31m-    """Upgrade schema."""[m
+[31m-[m
+[31m-    # ---------------------------------------------------------[m
+[31m-    # 1. Add embedding column[m
+[31m-    # ---------------------------------------------------------[m
+[31m-[m
+[31m-    op.add_column([m
+[31m-        "knowledge_base",[m
+[31m-        sa.Column([m
+[31m-            "embedding",[m
+[31m-            pgvector.sqlalchemy.vector.VECTOR(dim=384),[m
+[31m-            nullable=True,[m
+[31m-        ),[m
+[31m-    )[m
+[32m+[m[32mdef _column_exists(connection, table_name: str, column_name: str) -> bool:[m
+[32m+[m[32m    inspector = sa.inspect(connection)[m
+[32m+[m[32m    return column_name in {column["name"] for column in inspector.get_columns(table_name)}[m
+ [m
+[31m-    # ---------------------------------------------------------[m
+[31m-    # 2. Add UUID column safely[m
+[31m-    #[m
+[31m-    # Existing knowledge_base rows already exist, therefore[m
+[31m-    # UUID cannot initially be NOT NULL.[m
+[31m-    # ---------------------------------------------------------[m
+[31m-[m
+[31m-    op.add_column([m
+[31m-        "knowledge_base",[m
+[31m-        sa.Column([m
+[31m-            "uuid",[m
+[31m-            sa.UUID(),[m
+[31m-            nullable=True,[m
+[31m-        ),[m
+[31m-    )[m
+ [m
+[31m-    # Generate UUID values for existing rows.[m
+[31m-    op.execute([m
+[31m-        """[m
+[31m-        UPDATE knowledge_base[m
+[31m-        SET uuid = gen_random_uuid()[m
+[31m-        WHERE uuid IS NULL[m
+[31m-        """[m
+[31m-    )[m
+[31m-[m
+[31m-    # UUID is now populated for existing rows.[m
+[31m-    op.alter_column([m
+[31m-        "knowledge_base",[m
+[31m-        "uuid",[m
+[31m-        nullable=False,[m
+[31m-    )[m
+[31m-[m
+[31m-    # ---------------------------------------------------------[m
+[31m-    # 3. Add is_active safely[m
+[31m-    #[m
+[31m-    # Existing rows need a value before NOT NULL is applied.[m
+[31m-    # ---------------------------------------------------------[m
+[31m-[m
+[31m-    op.add_column([m
+[31m-        "knowledge_base",[m
+[31m-        sa.Column([m
+[31m-            "is_active",[m
+[31m-            sa.Boolean(),[m
+[31m-            nullable=True,[m
+[31m-        ),[m
+[31m-    )[m
+[32m+[m[32mdef upgrade() -> None:[m
+[32m+[m[32m    connection = op.get_bind()[m
+[32m+[m
+[32m+[m[32m    # SQLite DDL is non-transactional, so an interrupted migration can leave[m
+[32m+[m[32m    # additive columns behind while Alembic still reports the old revision.[m
+[32m+[m[32m    if not _column_exists(connection, "knowledge_base", "embedding"):[m
+[32m+[m[32m        op.add_column([m
+[32m+[m[32m            "knowledge_base",[m
+[32m+[m[32m            sa.Column([m
+[32m+[m[32m                "embedding",[m
+[32m+[m[32m                pgvector.sqlalchemy.vector.VECTOR(dim=384),[m
+[32m+[m[32m                nullable=True,[m
+[32m+[m[32m            ),[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m    if not _column_exists(connection, "knowledge_base", "uuid"):[m
+[32m+[m[32m        op.add_column([m
+[32m+[m[32m            "knowledge_base",[m
+[32m+[m[32m            sa.Column("uuid", sa.UUID(), nullable=True),[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m    # PostgreSQL has gen_random_uuid(); SQLite does not. Generate UUIDs in[m
+[32m+[m[32m    # Python for SQLite and other dialects while preserving UUID semantics.[m
+[32m+[m[32m    if connection.dialect.name == "postgresql":[m
+[32m+[m[32m        op.execute([m
+[32m+[m[32m            sa.text([m
+[32m+[m[32m                "UPDATE knowledge_base "[m
+[32m+[m[32m                "SET uuid = gen_random_uuid() "[m
+[32m+[m[32m                "WHERE uuid IS NULL"[m
+[32m+[m[32m            )[m
+[32m+[m[32m        )[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        rows = connection.execute([m
+[32m+[m[32m            sa.text("SELECT id FROM knowledge_base WHERE uuid IS NULL")[m
+[32m+[m[32m        ).fetchall()[m
+[32m+[m[32m        for row in rows:[m
+[32m+[m[32m            connection.execute([m
+[32m+[m[32m                sa.text("UPDATE knowledge_base SET uuid = :uuid WHERE id = :id"),[m
+[32m+[m[32m                {"uuid": str(uuid4()), "id": row[0]},[m
+[32m+[m[32m            )[m
+[32m+[m
+[32m+[m[32m    op.alter_column("knowledge_base", "uuid", nullable=False)[m
+[32m+[m
+[32m+[m[32m    if not _column_exists(connection, "knowledge_base", "is_active"):[m
+[32m+[m[32m        op.add_column([m
+[32m+[m[32m            "knowledge_base",[m
+[32m+[m[32m            sa.Column("is_active", sa.Boolean(), nullable=True),[m
+[32m+[m[32m        )[m
+ [m
+[31m-    # Existing knowledge records should be active.[m
+     op.execute([m
+[31m-        """[m
+[31m-        UPDATE knowledge_base[m
+[31m-        SET is_active = TRUE[m
+[31m-        WHERE is_active IS NULL[m
+[31m-        """[m
+[32m+[m[32m        sa.text([m
+[32m+[m[32m            "UPDATE knowledge_base "[m
+[32m+[m[32m            "SET is_active = TRUE "[m
+[32m+[m[32m            "WHERE is_active IS NULL"[m
+[32m+[m[32m        )[m
+     )[m
+[32m+[m[32m    op.alter_column("knowledge_base", "is_active", nullable=False)[m
+ [m
+[31m-    op.alter_column([m
+[31m-        "knowledge_base",[m
+[31m-        "is_active",[m
+[31m-        nullable=False,[m
+[31m-    )[m
+[31m-[m
+[31m-    # ---------------------------------------------------------[m
+[31m-    # 4. UUID index[m
+[31m-    # ---------------------------------------------------------[m
+[31m-[m
+[31m-    op.create_index([m
+[31m-        op.f("ix_knowledge_base_uuid"),[m
+[31m-        "knowledge_base",[m
+[31m-        ["uuid"],[m
+[31m-        unique=True,[m
+[31m-    )[m
+[32m+[m[32m    inspector = sa.inspect(connection)[m
+[32m+[m[32m    index_names = {index["name"] for index in inspector.get_indexes("knowledge_base")}[m
+[32m+[m[32m    expected_index = op.f("ix_knowledge_base_uuid")[m
+[32m+[m[32m    if expected_index not in index_names:[m
+[32m+[m[32m        op.create_index([m
+[32m+[m[32m            expected_index,[m
+[32m+[m[32m            "knowledge_base",[m
+[32m+[m[32m            ["uuid"],[m
+[32m+[m[32m            unique=True,[m
+[32m+[m[32m        )[m
+ [m
+ [m
+ def downgrade() -> None:[m
+[31m-    """Downgrade schema."""[m
+[31m-[m
+[31m-    # Remove UUID index.[m
+[31m-    op.drop_index([m
+[31m-        op.f("ix_knowledge_base_uuid"),[m
+[31m-        table_name="knowledge_base",[m
+[31m-    )[m
+[31m-[m
+[31m-    # Remove columns added by this migration.[m
+[31m-    op.drop_column([m
+[31m-        "knowledge_base",[m
+[31m-        "is_active",[m
+[31m-    )[m
+[31m-[m
+[31m-    op.drop_column([m
+[31m-        "knowledge_base",[m
+[31m-        "uuid",[m
+[31m-    )[m
+[31m-[m
+[31m-    op.drop_column([m
+[31m-        "knowledge_base",[m
+[31m-        "embedding",[m
+[31m-    )[m
+\ No newline at end of file[m
+[32m+[m[32m    op.drop_index(op.f("ix_knowledge_base_uuid"), table_name="knowledge_base")[m
+[32m+[m[32m    op.drop_column("knowledge_base", "is_active")[m
+[32m+[m[32m    op.drop_column("knowledge_base", "uuid")[m
+[32m+[m[32m    op.drop_column("knowledge_base", "embedding")[m

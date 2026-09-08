@@ -31,6 +31,17 @@ class OrganizationRepository(
 
         return self.db.scalar(statement) is not None
 
+    def get_by_email(
+        self,
+        email: str,
+    ) -> Organization | None:
+
+        statement = select(Organization).where(
+            Organization.email == email
+        )
+
+        return self.db.scalar(statement)
+
     def exists_by_name(
         self,
         name: str,
@@ -41,6 +52,17 @@ class OrganizationRepository(
         )
 
         return self.db.scalar(statement) is not None
+
+    def get_by_name(
+        self,
+        name: str,
+    ) -> Organization | None:
+
+        statement = select(Organization).where(
+            Organization.name == name
+        )
+
+        return self.db.scalar(statement)
 
     def get_by_id(
         self,

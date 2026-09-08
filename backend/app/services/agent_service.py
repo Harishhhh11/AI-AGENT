@@ -122,15 +122,19 @@ class AgentService:
             if item.id not in selected_set:
                 item.agent_id = None
 
-        for item in items:
-            if item.agent_id not in (None, agent_id):
-                raise ValueError(
-                    f'"{item.title}" is already assigned to another receptionist. '
-                    "Reassign it from Knowledge Management first."
-                )
-            item.agent_id = agent_id
+        try:
+            for item in items:
+                if item.agent_id not in (None, agent_id):
+                    raise ValueError(
+                        f'"{item.title}" is already assigned to another receptionist. '
+                        "Reassign it from Knowledge Management first."
+                    )
+                item.agent_id = agent_id
+            self.db.commit()
+        except ValueError:
+            self.db.rollback()
+            raise
 
-        self.db.commit()
         self.db.refresh(agent)
         return agent
 
@@ -156,6 +160,8 @@ class AgentService:
             value = getattr(data, field)
             if value is not None:
                 setattr(agent, field, value.strip() if isinstance(value, str) else value)
+        if not agent.is_active:
+            agent.is_published = False
         self.db.commit()
         self.db.refresh(agent)
         return agent

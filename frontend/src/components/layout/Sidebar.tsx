@@ -5,8 +5,7 @@ const sections = [
     label: "Overview",
     items: [
       { name: "Dashboard", path: "/", icon: "⌂" },
-      { name: "AI Receptionist", path: "/chat", icon: "✦" },
-      { name: "AI Receptionists", path: "/agents", icon: "◈" },
+      { name: "Your Receptionists", path: "/agents", icon: "◈" },
     ],
   },
   {
@@ -40,7 +39,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500 text-sm font-black shadow-lg shadow-indigo-500/20">AI</div>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-bold tracking-tight">AI Receptionist</h1>
+              <h1 className="truncate text-sm font-bold tracking-tight">AI Receptionist Platform</h1>
               <p className="mt-0.5 text-[11px] text-slate-400">Intelligent customer operations</p>
             </div>
           </div>
@@ -63,9 +62,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         </nav>
         <div className="px-4 pb-4">
           <div className="rounded-2xl border border-indigo-400/20 bg-indigo-500/10 p-4">
-            <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-emerald-400" /><p className="text-xs font-semibold text-white">Receptionist online</p></div>
-            <p className="mt-2 text-[11px] leading-5 text-slate-400">Keep your knowledge current so customer answers stay accurate.</p>
-            <NavLink to="/knowledge" onClick={onClose} className="mt-3 inline-flex text-[11px] font-semibold text-indigo-300 hover:text-white">Manage knowledge →</NavLink>
+            <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-emerald-400" /><p className="text-xs font-semibold text-white">Receptionist service online</p></div>
+            <p className="mt-2 text-[11px] leading-5 text-slate-400">Keep each receptionist connected only to the knowledge selected for it.</p>
+            <NavLink to="/agents" onClick={onClose} className="mt-3 inline-flex text-[11px] font-semibold text-indigo-300 hover:text-white">Manage receptionists →</NavLink>
           </div>
         </div>
       </aside>

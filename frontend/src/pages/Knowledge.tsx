@@ -24,17 +24,23 @@ export default function Knowledge() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  async function load() {
-    setLoading(true); setError("");
-    try {
-      const [knowledgeData, agentData] = await Promise.all([getKnowledge(), getAgents()]);
-      setItems(knowledgeData); setAgents(agentData);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load knowledge.");
-    } finally { setLoading(false); }
-  }
-
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const [knowledgeData, agentData] = await Promise.all([getKnowledge(), getAgents()]);
+        if (!mounted) return;
+        setItems(knowledgeData);
+        setAgents(agentData);
+      } catch (reason) {
+        if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load knowledge.");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+    void load();
+    return () => { mounted = false; };
+  }, []);
 
   const categories = useMemo(() => Array.from(new Set([...CATEGORY_PRESETS, ...items.map((item) => item.category).filter(Boolean)])), [items]);
   const visibleItems = useMemo(() => {
@@ -98,7 +104,7 @@ export default function Knowledge() {
   return <div className="space-y-6">
     <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">AI foundation</p><h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Knowledge Management</h1><p className="mt-1 text-sm text-slate-500">Control exactly which verified facts each receptionist can use.</p></div>
-      <div className="flex flex-wrap gap-2"><button type="button" onClick={() => void load()} disabled={loading} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Refresh</button><Link to="/documents" className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Upload documents</Link><button type="button" onClick={openNewItem} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">+ Add knowledge</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" onClick={() => window.location.reload()} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Refresh</button><Link to="/documents" className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Upload documents</Link><button type="button" onClick={openNewItem} className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">+ Add knowledge</button></div>
     </div>
 
     <div className="grid gap-3 sm:grid-cols-3"><Metric label="Knowledge items" value={items.length} /><Metric label="Active" value={items.filter((item) => item.is_active).length} tone="text-emerald-600" /><Metric label="Receptionists" value={agents.length} tone="text-indigo-600" /></div>

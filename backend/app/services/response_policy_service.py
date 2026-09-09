@@ -37,9 +37,10 @@ class ResponsePolicyService:
             marker in text for marker in ("complete details", "everything", "all details", "in detail")
         ):
             style = self.LONG
-        elif count > 1 or intent in {"duration_and_timings", "comparison", "multi_part"} or any(
-            marker in text for marker in (" and ", " also ", " plus ")
-        ):
+        elif count > 1 or intent in {
+            "duration_and_timings", "comparison", "multi_part", "topics", "company_courses", "availability",
+            "company_information",
+        } or any(marker in text for marker in (" and ", " also ", " plus ")):
             style = self.MEDIUM
         else:
             style = self.SHORT

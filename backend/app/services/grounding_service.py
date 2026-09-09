@@ -33,6 +33,19 @@ class GroundingService:
             content=content,
             semantic_distance=semantic_distance,
         )
+
+        # Broad company questions (for example, "Which courses do you offer?")
+        # intentionally have no subject-specific terms after normalization. The
+        # candidates have already been restricted by organization/agent scope and
+        # retrieved from the verified knowledge base, so they remain valid sources.
+        if not self.relevance_service.has_meaningful_terms(query):
+            return GroundingDecision(
+                accepted=True,
+                score=0.0,
+                reason="accepted broad verified knowledge query",
+                relevance=relevance,
+            )
+
         accepted = relevance.accepted
         reason = "accepted" if accepted else "insufficient relevance"
         return GroundingDecision(

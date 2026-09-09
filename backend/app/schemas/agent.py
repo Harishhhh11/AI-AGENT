@@ -14,6 +14,9 @@ class AgentCreate(BaseModel):
         default="Hello! How can I help you today?", min_length=1, max_length=1000
     )
     system_instructions: str | None = Field(default=None, max_length=6000)
+    # Existing shared/unassigned knowledge records selected during creation.
+    # The backend validates every item belongs to the authenticated organization.
+    knowledge_item_ids: list[int] = Field(default_factory=list, max_length=100)
 
     @field_validator("public_slug")
     @classmethod
@@ -44,8 +47,15 @@ class AgentResponse(BaseModel):
     welcome_message: str
     is_published: bool
     is_active: bool
+    knowledge_item_ids: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class AgentKnowledgeUpdate(BaseModel):
+    """Complete replacement of the receptionist's private knowledge selection."""
+
+    knowledge_item_ids: list[int] = Field(default_factory=list, max_length=100)
 
 
 class PublicAgentResponse(BaseModel):

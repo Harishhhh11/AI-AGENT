@@ -1,20 +1,24 @@
-@"
-# Environment files
+# Python / environment
 .env
 *.env
-
-# Python virtual environments
 .venv/
 venv/
-
-# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
 
-# Node modules and build files
+# Node / frontend build
 frontend/node_modules/
 frontend/dist/
 
+# Local databases
+*.db
+*.db-*
+backend/*.sqlite
+backend/*.sqlite3
+
+# Runtime / build logs
+*.log
+
 # Google service account credentials
 backend/ai-reseptionist-505910-93fa26a93a57.json
-"@ | Set-Content -Path .gitignore

@@ -1,10 +1,4 @@
-/**
- * Document upload API.
- *
- * Documents use multipart/form-data, so this endpoint
- * intentionally uses fetch() instead of the normal JSON
- * post() helper from client.ts.
- */
+/** Document upload API. */
 
 export interface DocumentChunk {
   id: number;
@@ -14,172 +8,50 @@ export interface DocumentChunk {
 
 export interface DocumentUploadResponse {
   success: boolean;
-
   message: string;
-
   data: {
     title: string;
     category: string;
     source: string;
-
     chunks_created: number;
-
     chunks: DocumentChunk[];
+    agent_id?: number | null;
   };
 }
 
-
-const DOCUMENT_UPLOAD_URL =
-  "http://127.0.0.1:8000/api/v1/documents/upload";
-
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 
 export async function uploadDocument(
   file: File,
-  category: string
+  category: string,
+  agentId?: number | null,
 ): Promise<DocumentUploadResponse> {
+  const token = localStorage.getItem("access_token");
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("category", category);
+  if (agentId != null) formData.append("agent_id", String(agentId));
 
-  const token =
-    localStorage.getItem(
-      "access_token"
-    );
+  const headers: HeadersInit = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
 
+  const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
 
-  const formData =
-    new FormData();
-
-
-  formData.append(
-    "file",
-    file
-  );
-
-
-  formData.append(
-    "category",
-    category
-  );
-
-
-  const headers: HeadersInit = {
-    Accept:
-      "application/json",
-  };
-
-
-  if (token) {
-
-    headers.Authorization =
-      `Bearer ${token}`;
-
+  const body: unknown = await response.json().catch(() => null);
+  if (response.status === 401) {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("user");
+    window.location.href = "/login";
+    throw new Error("Authentication required.");
   }
-
-
-  const response =
-    await fetch(
-      DOCUMENT_UPLOAD_URL,
-      {
-        method: "POST",
-        headers,
-        body: formData,
-      }
-    );
-
-
-  /*
-   * Authentication expired.
-   */
-
-  if (
-    response.status === 401
-  ) {
-
-    localStorage.removeItem(
-      "access_token"
-    );
-
-    localStorage.removeItem(
-      "user"
-    );
-
-    window.location.href =
-      "/login";
-
-    throw new Error(
-      "Authentication required."
-    );
-  }
-
-
-  /*
-   * Handle API errors.
-   */
-
   if (!response.ok) {
-
-    let message =
-      `Document upload failed with status ${response.status}.`;
-
-
-    const contentType =
-      response.headers.get(
-        "content-type"
-      );
-
-
-    if (
-      contentType?.includes(
-        "application/json"
-      )
-    ) {
-
-      const errorData =
-        await response.json();
-
-
-      if (
-        typeof errorData ===
-          "object" &&
-        errorData !== null &&
-        "detail" in errorData
-      ) {
-
-        message =
-          String(
-            (
-              errorData as {
-                detail: unknown;
-              }
-            ).detail
-          );
-
-      }
-
-    } else {
-
-      const errorText =
-        await response.text();
-
-
-      if (errorText) {
-
-        message =
-          errorText;
-      }
-
-    }
-
-
-    throw new Error(
-      message
-    );
+    const detail = body && typeof body === "object" && "detail" in body ? (body as { detail?: unknown }).detail : null;
+    throw new Error(typeof detail === "string" ? detail : `Document upload failed with status ${response.status}.`);
   }
-
-
-  /*
-   * Parse successful response.
-   */
-
-  return (
-    await response.json()
-  ) as DocumentUploadResponse;
+  if (!body || typeof body !== "object") throw new Error("The document service returned an invalid response.");
+  return body as DocumentUploadResponse;
 }

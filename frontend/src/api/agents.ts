@@ -1,4 +1,4 @@
-import { get, patch, post, put } from "./client";
+import { del, get, patch, post, put } from "./client";
 import type { KnowledgeItem } from "./knowledge";
 
 export interface Agent {
@@ -20,7 +20,7 @@ export interface AgentCreate {
   name: string;
   public_slug: string;
   welcome_message: string;
-  system_instructions?: string;
+  system_instructions?: string | null;
   knowledge_item_ids: number[];
 }
 
@@ -36,3 +36,4 @@ export const getAgentKnowledge = (id: number) => get<KnowledgeItem[]>(`/agents/$
 export const updateAgentKnowledge = (id: number, data: AgentKnowledgeUpdate) => put<Agent, AgentKnowledgeUpdate>(`/agents/${id}/knowledge`, data);
 export const publishAgent = (id: number) => post<Agent, Record<string, never>>(`/agents/${id}/publish`, {});
 export const unpublishAgent = (id: number) => post<Agent, Record<string, never>>(`/agents/${id}/unpublish`, {});
+export const deleteAgent = (id: number) => del(`/agents/${id}`);

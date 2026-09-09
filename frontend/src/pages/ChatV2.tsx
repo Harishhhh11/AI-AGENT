@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getAgent, getAgents } from "../api/agents";
@@ -43,13 +43,8 @@ export default function ChatV2() {
   }, [routeAgentId]);
 
   useEffect(() => {
+    if (!selectedAgentId) return;
     let mounted = true;
-    if (!selectedAgentId) {
-      setAgent(null);
-      setMessages([{ id: Date.now(), role: "assistant", content: FALLBACK_WELCOME }]);
-      setSessionId(null);
-      return () => { mounted = false; };
-    }
     setLoadingAgent(true);
     setError(null);
     const storageKey = `chat_session:${selectedAgentId}`;
@@ -68,7 +63,14 @@ export default function ChatV2() {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
-  function selectAgent(value: number) { setSelectedAgentId(value); setAgent(null); setMessages([]); setSessionId(localStorage.getItem(`chat_session:${value}`)); setInput(""); setError(null); }
+  function selectAgent(value: number) {
+    setSelectedAgentId(value);
+    setAgent(agents.find((item) => item.id === value) ?? null);
+    setMessages([]);
+    setSessionId(localStorage.getItem(`chat_session:${value}`));
+    setInput("");
+    setError(null);
+  }
 
   async function submit(message: string) {
     const text = message.trim();

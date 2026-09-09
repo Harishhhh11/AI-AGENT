@@ -31,12 +31,17 @@ class KnowledgeRanker:
                 content=str(getattr(item, "content", "") or ""),
                 semantic_distance=getattr(item, "semantic_distance", None),
             )
-            # Semantic evidence is useful for paraphrases, but it must not
-            # override an explicit subject term that the candidate contradicts.
             if not result.accepted:
                 continue
-            if result.matched_terms == () and result.semantic_score < 0.60:
-                continue
+
+            if not result.matched_terms:
+                # Keep semantic-only retrieval for genuine paraphrases, but do
+                # not accept a short, explicit title that names a different
+                # subject with zero lexical overlap (e.g. "python fees" -> "Java").
+                title_terms = self.relevance._meaningful_terms(str(getattr(item, "title", "") or ""))
+                if title_terms and len(title_terms) <= 3:
+                    continue
+
             scored.append((result.combined_score, result.lexical_score, -(getattr(item, "id", 0) or 0), item))
 
         scored.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)

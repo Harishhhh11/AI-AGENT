@@ -40,4 +40,6 @@ class ConversationGuard:
             for term in terms
             if re.search(rf"(?<![a-z0-9+#]){re.escape(term)}(?![a-z0-9+#])", corpus)
         )
-        return hits >= (1 if len(terms) == 1 else (len(terms) + 1) // 2)
+        # A multi-word subject is a conjunction: all meaningful words are
+        # required in the candidate instead of allowing a broad partial match.
+        return hits == len(terms)

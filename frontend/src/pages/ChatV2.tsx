@@ -25,8 +25,7 @@ export default function ChatV2() {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const storageKey = selectedAgentId ? `chat_session:${selectedAgentId}` : "chat_session:default";
-  const [sessionId, setSessionId] = useState<string | null>(() => localStorage.getItem(storageKey));
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingAgent, setLoadingAgent] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,17 +58,19 @@ export default function ChatV2() {
     if (!selectedAgentId) {
       setAgent(null);
       setMessages([{ id: Date.now(), role: "assistant", content: FALLBACK_WELCOME }]);
-      setSessionId(localStorage.getItem("chat_session:default"));
+      setSessionId(null);
       return () => { mounted = false; };
     }
     setLoadingAgent(true);
     setError(null);
+    const storageKey = `chat_session:${selectedAgentId}`;
+    const savedSession = localStorage.getItem(storageKey);
     void getAgent(selectedAgentId)
       .then((value) => {
         if (!mounted) return;
         setAgent(value);
         setMessages([{ id: Date.now(), role: "assistant", content: value.welcome_message || FALLBACK_WELCOME }]);
-        setSessionId(localStorage.getItem(`chat_session:${value.id}`));
+        setSessionId(savedSession);
       })
       .catch((reason) => {
         if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load this receptionist.");

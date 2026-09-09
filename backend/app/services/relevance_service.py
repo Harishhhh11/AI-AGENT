@@ -51,6 +51,8 @@ class RelevanceService:
         "technologies": "technology",
     }
 
+    BROAD_SCOPE_TERMS = {"course", "courses", "class", "classes", "service", "services", "product", "products"}
+
     def score(self, *, query: str, title: str, content: str, semantic_distance: float | None = None) -> RelevanceResult:
         query_terms = self._meaningful_terms(query)
         title_terms = self._tokens(title)
@@ -82,7 +84,11 @@ class RelevanceService:
 
     @classmethod
     def _meaningful_terms(cls, value: str) -> set[str]:
-        return {token for token in cls._tokens(value) if token not in cls.GENERIC_TERMS and len(token) > 1}
+        tokens = cls._tokens(value)
+        meaningful = {token for token in tokens if token not in cls.GENERIC_TERMS and len(token) > 1}
+        if meaningful:
+            return meaningful
+        return {cls.IRREGULAR_STEMS.get(token, token) for token in tokens if token in cls.BROAD_SCOPE_TERMS}
 
     @classmethod
     def _term_matches(cls, term: str, candidates: set[str]) -> bool:

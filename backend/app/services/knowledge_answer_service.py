@@ -69,7 +69,7 @@ class KnowledgeAnswerService:
         """Keep adjacent facts that clarify a verified answer instead of truncating them."""
         if len(matching) >= 2 or len(pieces) <= 1:
             return matching
-        selected_indexes = [pieces.index(piece) for piece in matching if piece in pieces]
+        selected_indexes = [index for index, piece in enumerate(pieces) if piece in matching]
         expanded = list(matching)
         for index in selected_indexes:
             for neighbor in (index - 1, index + 1):
@@ -78,8 +78,8 @@ class KnowledgeAnswerService:
                 candidate = pieces[neighbor]
                 if candidate in expanded:
                     continue
-                normalized = cls._clean(candidate).lower()
-                if any(term in normalized.split() for term in cls.SUPPORTING_DETAIL_TERMS):
+                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", cls._clean(candidate).lower()))
+                if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
                     expanded.append(candidate)
         expanded.sort(key=lambda piece: pieces.index(piece))
         return expanded

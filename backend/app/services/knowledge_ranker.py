@@ -19,10 +19,6 @@ class KnowledgeRanker:
         except (TypeError, ValueError):
             limit = 5
 
-        # Company-wide prompts such as "what courses do you offer?" can contain
-        # no meaningful subject terms after stop-word removal. In that case the
-        # KnowledgeService has already produced the best tenant-scoped candidates;
-        # preserve their order instead of incorrectly treating them as irrelevant.
         meaningful_terms = self.relevance._meaningful_terms(query)
         if not meaningful_terms:
             return list(items[:limit])
@@ -35,7 +31,11 @@ class KnowledgeRanker:
                 content=str(getattr(item, "content", "") or ""),
                 semantic_distance=getattr(item, "semantic_distance", None),
             )
+            # Semantic evidence is useful for paraphrases, but it must not
+            # override an explicit subject term that the candidate contradicts.
             if not result.accepted:
+                continue
+            if result.matched_terms == () and result.semantic_score < 0.60:
                 continue
             scored.append((result.combined_score, result.lexical_score, -(getattr(item, "id", 0) or 0), item))
 

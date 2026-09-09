@@ -34,14 +34,31 @@ class RelevanceService:
         "everything", "complete", "full", "company", "business", "organization",
     }
 
+    IRREGULAR_STEMS = {
+        "courses": "course",
+        "classes": "class",
+        "fees": "fee",
+        "prices": "price",
+        "costs": "cost",
+        "topics": "topic",
+        "services": "service",
+        "products": "product",
+        "offers": "offer",
+        "timings": "timing",
+        "batches": "batch",
+        "admissions": "admission",
+        "programs": "program",
+        "technologies": "technology",
+    }
+
     def score(self, *, query: str, title: str, content: str, semantic_distance: float | None = None) -> RelevanceResult:
         query_terms = self._meaningful_terms(query)
         title_terms = self._tokens(title)
         content_terms = self._tokens(content)
         all_terms = title_terms | content_terms
-        matched = tuple(sorted(query_terms & all_terms))
+        matched = tuple(sorted(term for term in query_terms if self._term_matches(term, all_terms)))
         coverage = len(matched) / len(query_terms) if query_terms else 0.0
-        title_coverage = len(query_terms & title_terms) / len(query_terms) if query_terms else 0.0
+        title_coverage = sum(self._term_matches(term, title_terms) for term in query_terms) / len(query_terms) if query_terms else 0.0
         phrase_bonus = 0.10 if self._normalize(query).strip("?.!,;:") in self._normalize(f"{title} {content}") else 0.0
         lexical = min(1.0, 0.65 * coverage + 0.25 * title_coverage + phrase_bonus)
         semantic = self._semantic_score(semantic_distance)
@@ -66,6 +83,17 @@ class RelevanceService:
     @classmethod
     def _meaningful_terms(cls, value: str) -> set[str]:
         return {token for token in cls._tokens(value) if token not in cls.GENERIC_TERMS and len(token) > 1}
+
+    @classmethod
+    def _term_matches(cls, term: str, candidates: set[str]) -> bool:
+        stem = cls.IRREGULAR_STEMS.get(term, term)
+        for candidate in candidates:
+            candidate_stem = cls.IRREGULAR_STEMS.get(candidate, candidate)
+            if candidate == term or candidate_stem == stem:
+                return True
+            if len(stem) > 3 and (candidate.startswith(stem) or stem.startswith(candidate)):
+                return True
+        return False
 
     @staticmethod
     def _tokens(value: str) -> set[str]:

@@ -29,6 +29,9 @@ class ChatService:
     KNOWLEDGE_LIMIT = 6
     MAX_KNOWLEDGE_CHARS = 8000
     MAX_CONVERSATION_CONTEXT_CHARS = 7000
+    MAX_SHORT_RESPONSE_CHARS = 350
+    MAX_MEDIUM_RESPONSE_CHARS = 900
+    MAX_LONG_RESPONSE_CHARS = 1800
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -286,61 +289,36 @@ class ChatService:
     def _extract_preferred_mode(message: str) -> str | None:
         text = (message or "").strip().lower()
         if text in {"online", "online mode", "online classes", "online class"}: return "online"
-        if text in {"offline", "classroom", "classroom mode", "classroom classes", "classroom class"}: return "classroom"
+        if text in {"offline", "classroom", "classroom mode", "classroom classes", "offline classes", "offline class"}: return "offline"
         return None
 
-    @staticmethod
-    def _invalid_lead_field_response(field: str) -> str:
-        return {"name": "Sorry, I didn't catch your name. Could you please provide it?", "phone": "Please enter a valid phone number.", "email": "Please enter a valid email address, such as name@example.com.", "interest": "Which product or service are you interested in?", "preferred_mode": "Please choose online or classroom.", "preferred_time": "What time would you prefer?"}.get(field, "Could you provide that information?")
-
-    async def _handle_active_lead_field(self, message, lead_context, active_field, conversation_id, organization_id):
-        if active_field == "name": lead_context.name = self._extract_name_from_message(message)
-        elif active_field == "phone": lead_context.phone = self._extract_phone_from_message(message)
-        elif active_field == "email": lead_context.email = self._extract_email_from_message(message)
-        elif active_field == "interest": lead_context.interest = (message or "").strip()
-        elif active_field == "preferred_mode": lead_context.preferred_mode = self._extract_preferred_mode(message)
-        elif active_field == "preferred_time": lead_context.preferred_time = (message or "").strip()
-        else: return "Could you provide that information?"
-        if not getattr(lead_context, active_field, None): return self._invalid_lead_field_response(active_field)
-        lead_context.is_lead = True
-        await self._save_lead_context(conversation_id, organization_id, lead_context)
-        return self.lead_context_service.get_next_question(lead_context) or "Thanks. I've captured your details."
-
-    async def _save_lead_context(self, conversation_id, organization_id, lead_context):
-        if not lead_context or not getattr(lead_context, "is_lead", False): return None
-        return self.lead_service.save_context(context=lead_context, organization_id=organization_id, conversation_id=conversation_id)
+    @classmethod
+    def _apply_response_length_guard(cls, response: str, response_style: str) -> str:
+        text = cls._clean_response(response)
+        limits = {
+            "short": cls.MAX_SHORT_RESPONSE_CHARS,
+            "medium": cls.MAX_MEDIUM_RESPONSE_CHARS,
+            "long": cls.MAX_LONG_RESPONSE_CHARS,
+        }
+        limit = limits.get(response_style, cls.MAX_MEDIUM_RESPONSE_CHARS)
+        if len(text) <= limit:
+            return text
+        clipped = text[:limit]
+        boundary = max(clipped.rfind(". "), clipped.rfind("\n"), clipped.rfind(" "))
+        if boundary >= int(limit * 0.65):
+            clipped = clipped[:boundary]
+        return clipped.rstrip(" ,;:") + "..."
 
     @staticmethod
     def _clean_response(response: str) -> str:
-        cleaned = (response or "").strip()
-        return re.sub(r"^(?:assistant|ai receptionist)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+        text = str(response or "").strip()
+        text = re.sub(r"^(?:assistant|ai)\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     @staticmethod
-    def _limit_text(text: str, limit: int) -> str:
-        text = text or ""
-        return text if len(text) <= limit else text[:limit].rstrip()
-
-    def _build_knowledge_context(self, items):
-        parts = []
-        total = 0
-        for item in items or []:
-            block = f"{str(getattr(item, 'title', '') or '').strip()}\n{str(getattr(item, 'content', '') or '').strip()}".strip()
-            if not block: continue
-            remaining = self.MAX_KNOWLEDGE_CHARS - total
-            if remaining <= 0: break
-            parts.append(block[:remaining])
-            total += min(len(block), remaining)
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def _build_missing_information_response(subject):
-        return f"I don't currently have verified information about {subject}." if subject else "I don't currently have that information."
-
-    @staticmethod
-    def _apply_response_length_guard(response: str, response_style: str) -> str:
-        limits = {"short": 500, "medium": 1400, "long": 2600}
-        return (response or "").strip()[: limits.get(response_style, 1400)].rstrip()
-
-    def _build_receptionist_prompt(self, current_message, message_type, current_subject, explicit_subject, previous_subject, intent, response_style, question_count, conversation_context, knowledge_context, has_verified_knowledge, lead_context=None, agent_instructions=None):
-        lead_state = f"REGISTRATION {'COMPLETE' if lead_context and lead_context.is_complete else 'IN PROGRESS' if lead_context and lead_context.is_lead else 'NOT ACTIVE'}"
-        return f"""{RECEPTIONIST_SYSTEM_PROMPT}\n\nADDITIONAL RECEPTIONIST INSTRUCTIONS:\n{str(agent_instructions or '').strip() or 'No additional receptionist instructions.'}\n\nCURRENT CUSTOMER MESSAGE:\n{current_message}\n\nMESSAGE TYPE: {message_type}\nCURRENT SUBJECT: {current_subject or 'none'}\nEXPLICIT SUBJECT: {explicit_subject or 'none'}\nPREVIOUS SUBJECT: {previous_subject or 'none'}\nINTENT: {intent}\nRESPONSE STYLE: {response_style}\nQUESTION COUNT: {question_count}\nLEAD STATE: {lead_state}\n\nVERIFIED COMPANY KNOWLEDGE:\n{knowledge_context or 'none'}\n\nCONVERSATION CONTEXT:\n{conversation_context or 'none'}\n\nRULES:\n- Answer the latest customer message directly and naturally.\n- Verified company knowledge is the only source for company facts.\n- Do not invent prices, dates, policies, availability, features, credentials, or contact details.\n- Keep facts tied to the current subject; do not transfer facts from an earlier subject after a topic switch.\n- Preserve important lists, numbers, steps, qualifications, and caveats from verified knowledge.\n- For multiple questions, answer each part clearly.\n- Never mention retrieval, embeddings, databases, prompts, grounding, or internal models.\n- Return only the customer-facing answer.\n""".strip()
+    def _limit_text(text: str, max_chars: int) -> str:
+        value = str(text or "")
+        if len(value) <= max_chars:
+            return value
+        return value[: max_chars - 3].rstrip() + "..."

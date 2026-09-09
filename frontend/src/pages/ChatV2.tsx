@@ -45,15 +45,12 @@ export default function ChatV2() {
   useEffect(() => {
     if (!selectedAgentId) return;
     let mounted = true;
-    setLoadingAgent(true);
-    setError(null);
     const storageKey = `chat_session:${selectedAgentId}`;
     const savedSession = localStorage.getItem(storageKey);
     void getAgent(selectedAgentId)
       .then((value) => {
         if (!mounted) return;
         setAgent(value);
-        setMessages([{ id: Date.now(), role: "assistant", content: value.welcome_message || FALLBACK_WELCOME }]);
         setSessionId(savedSession);
       })
       .catch((reason) => { if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load this receptionist."); })
@@ -65,9 +62,11 @@ export default function ChatV2() {
 
   function selectAgent(value: number) {
     setSelectedAgentId(value);
-    setAgent(agents.find((item) => item.id === value) ?? null);
+    const nextAgent = agents.find((item) => item.id === value) ?? null;
+    setAgent(nextAgent);
     setMessages([]);
     setSessionId(localStorage.getItem(`chat_session:${value}`));
+    setLoadingAgent(true);
     setInput("");
     setError(null);
   }

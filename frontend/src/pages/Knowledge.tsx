@@ -26,19 +26,18 @@ export default function Knowledge() {
 
   useEffect(() => {
     let mounted = true;
-    const load = async () => {
-      try {
-        const [knowledgeData, agentData] = await Promise.all([getKnowledge(), getAgents()]);
+    void Promise.all([getKnowledge(), getAgents()])
+      .then(([knowledgeData, agentData]) => {
         if (!mounted) return;
         setItems(knowledgeData);
         setAgents(agentData);
-      } catch (reason) {
+      })
+      .catch((reason) => {
         if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load knowledge.");
-      } finally {
+      })
+      .finally(() => {
         if (mounted) setLoading(false);
-      }
-    };
-    void load();
+      });
     return () => { mounted = false; };
   }, []);
 

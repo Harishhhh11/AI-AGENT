@@ -17,6 +17,13 @@ class KnowledgeAnswerService:
         "contact": {"phone", "mobile", "email", "address", "location", "contact"},
     }
 
+    SUPPORTING_DETAIL_TERMS = {
+        "available", "availability", "installment", "installments", "include", "includes", "included",
+        "eligibility", "requirement", "requirements", "required", "benefit", "benefits", "certificate",
+        "certification", "placement", "placements", "discount", "discounts", "offer", "offers",
+        "registration", "admission", "admissions", "batch", "batches", "weekday", "weekend",
+    }
+
     def answer(self, *, items: list[object], intent: str, subject: str | None, response_style: str) -> str | None:
         if not items:
             return None
@@ -43,8 +50,10 @@ class KnowledgeAnswerService:
             matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
             if not matching and self._contains_fact(content, labels):
                 matching = [content]
+            if matching:
+                matching = self._attach_supporting_details(pieces, matching)
             unique: list[str] = []
-            for piece in matching[:4]:
+            for piece in matching[:6]:
                 normalized = self._clean(piece).lower()
                 if normalized and normalized not in seen:
                     seen.add(normalized)
@@ -54,6 +63,26 @@ class KnowledgeAnswerService:
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
+
+    @classmethod
+    def _attach_supporting_details(cls, pieces: list[str], matching: list[str]) -> list[str]:
+        """Keep adjacent facts that clarify a verified answer instead of truncating them."""
+        if len(matching) >= 2 or len(pieces) <= 1:
+            return matching
+        selected_indexes = [pieces.index(piece) for piece in matching if piece in pieces]
+        expanded = list(matching)
+        for index in selected_indexes:
+            for neighbor in (index - 1, index + 1):
+                if neighbor < 0 or neighbor >= len(pieces):
+                    continue
+                candidate = pieces[neighbor]
+                if candidate in expanded:
+                    continue
+                normalized = cls._clean(candidate).lower()
+                if any(term in normalized.split() for term in cls.SUPPORTING_DETAIL_TERMS):
+                    expanded.append(candidate)
+        expanded.sort(key=lambda piece: pieces.index(piece))
+        return expanded
 
     def _summary(self, items: list[object], response_style: str, company_wide: bool = False) -> str | None:
         parts: list[str] = []

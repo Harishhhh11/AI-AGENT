@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getAgent, getAgents } from "../api/agents";
@@ -22,7 +22,6 @@ export default function ChatV2() {
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadingAgent, setLoadingAgent] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -37,8 +36,7 @@ export default function ChatV2() {
         const initialId = routeAgentId && items.some((item) => item.id === routeAgentId) ? routeAgentId : items[0]?.id ?? null;
         setSelectedAgentId(initialId);
       })
-      .catch((reason) => { if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load your receptionists."); })
-      .finally(() => { if (mounted) setLoadingAgent(false); });
+      .catch((reason) => { if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load your receptionists."); });
     return () => { mounted = false; };
   }, [routeAgentId]);
 
@@ -53,8 +51,7 @@ export default function ChatV2() {
         setAgent(value);
         setSessionId(savedSession);
       })
-      .catch((reason) => { if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load this receptionist."); })
-      .finally(() => { if (mounted) setLoadingAgent(false); });
+      .catch((reason) => { if (mounted) setError(reason instanceof Error ? reason.message : "Unable to load this receptionist."); });
     return () => { mounted = false; };
   }, [selectedAgentId]);
 
@@ -66,7 +63,6 @@ export default function ChatV2() {
     setAgent(nextAgent);
     setMessages([]);
     setSessionId(localStorage.getItem(`chat_session:${value}`));
-    setLoadingAgent(true);
     setInput("");
     setError(null);
   }

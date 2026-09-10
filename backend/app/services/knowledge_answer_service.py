@@ -73,13 +73,16 @@ class KnowledgeAnswerService:
             content = self._clean_preserve_lines(getattr(item, "content", ""))
             if not content:
                 continue
-            extracted = self._extract_field(content, field)
-            if extracted:
-                supporting = self._supporting_sentence_for_field(content, field, extracted)
-                answer_text = f"{title}: {supporting or extracted}" if title else (supporting or extracted)
+            source_fact = self._source_fact_sentence(content, field)
+            if source_fact:
+                normalized_fact = self._normalize_fact(source_fact)
+                if normalized_fact and normalized_fact in seen_facts:
+                    continue
+                answer_text = f"{title}: {source_fact}" if title else source_fact
                 normalized_answer = self._normalize_fact(answer_text)
                 if normalized_answer in seen_facts:
                     continue
+                seen_facts.add(normalized_fact)
                 seen_facts.add(normalized_answer)
                 answers.append(answer_text)
             else:
@@ -93,6 +96,31 @@ class KnowledgeAnswerService:
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
+
+    @classmethod
+    def _source_fact_sentence(cls, content: str, field: str) -> str | None:
+        pieces = cls._pieces(content)
+        for index, piece in enumerate(pieces):
+            if not cls._contains_fact(piece, cls.FACT_LABELS[field]):
+                continue
+            extracted = cls._extract_field(piece, field)
+            if not extracted:
+                continue
+            # For timing/duration/mode answers, remove metadata prefixes such as
+            # "Class Schedule:" and return the verified value itself.
+            if field in {"timings", "duration", "mode"}:
+                result = extracted
+            else:
+                # Preserve the original verified sentence for fee/discount/contact
+                # facts so wording such as "The fee is ..." remains intact.
+                result = piece.strip()
+            if index + 1 < len(pieces):
+                candidate = pieces[index + 1]
+                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
+                if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
+                    result = f"{result} {candidate.strip()}"
+            return result.strip()
+        return None
 
     @classmethod
     def _extract_field(cls, content: str, field: str) -> str | None:
@@ -111,30 +139,6 @@ class KnowledgeAnswerService:
                 return value.rstrip(".")
             return f"{label} {value}".strip()
         return None
-
-    @classmethod
-    def _supporting_sentence_for_field(cls, content: str, field: str, extracted: str) -> str | None:
-        pieces = cls._pieces(content)
-        if len(pieces) < 2:
-            return None
-        for index, piece in enumerate(pieces):
-            if cls._field_matches_piece(piece, field, extracted):
-                result = [piece]
-                if index + 1 < len(pieces):
-                    candidate = pieces[index + 1]
-                    candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
-                    if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
-                        result.append(candidate)
-                return " ".join(result)
-        return None
-
-    @classmethod
-    def _field_matches_piece(cls, piece: str, field: str, extracted: str) -> bool:
-        normalized_piece = cls._normalize_fact(piece)
-        normalized_extracted = cls._normalize_fact(extracted)
-        if normalized_extracted and normalized_extracted in normalized_piece:
-            return True
-        return any(re.search(pattern, piece, flags=re.IGNORECASE) for pattern in cls.FIELD_PATTERNS.get(field, ()))
 
     @classmethod
     def _normalize_fact(cls, value: str) -> str:

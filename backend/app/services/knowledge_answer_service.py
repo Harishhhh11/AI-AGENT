@@ -26,26 +26,28 @@ class KnowledgeAnswerService:
 
     FIELD_PATTERNS = {
         "fee": (
-            r"((?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"((?:course\s*)?fee(?:s)?)\s+(?:is|are)\s+(?P<value>[^.\n]+)",
-            r"(?:price|pricing|cost|tuition)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:course\s*)?fee(?:s)?)\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
+            r"(?P<label>(?:price|pricing|cost|tuition))\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:price|pricing|cost|tuition))\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
         ),
         "duration": (
-            r"duration\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"duration\s+(?:is|of)\s+(?P<value>[^.\n]+)",
+            r"(?P<label>duration)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>duration)\s+(?P<verb>is|of)\s+(?P<value>[^.\n]+)",
         ),
         "timings": (
-            r"(?:class\s+)?schedule\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?:class\s+)?timings?\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?:class\s+)?timings?\s+(?:are|is)\s+(?P<value>[^.\n]+)",
+            r"(?P<label>(?:class\s+)?schedule)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:class\s+)?timings?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:class\s+)?timings?)\s+(?P<verb>are|is)\s+(?P<value>[^.\n]+)",
         ),
         "mode": (
-            r"training\s+mode\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"mode\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>training\s+mode)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>mode)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>mode)\s+(?P<verb>is)\s+(?P<value>[^.\n]+)",
         ),
         "contact": (
-            r"contact\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?:phone|mobile|email|address|location)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>contact)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:phone|mobile|email|address|location))\s*[:\-]\s*(?P<value>[^.\n]+)",
         ),
     }
 
@@ -73,20 +75,14 @@ class KnowledgeAnswerService:
                 continue
             extracted = self._extract_field(content, field)
             pieces = [extracted] if extracted else [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
-            if extracted:
-                unique = [extracted]
-            else:
-                pieces = self._attach_supporting_details(self._pieces(content), pieces) if pieces else []
-                unique = []
-                for piece in pieces[:6]:
-                    normalized = self._clean(piece).lower()
-                    if normalized and normalized not in seen:
-                        seen.add(normalized)
-                        unique.append(self._clean(piece))
+            unique: list[str] = []
+            for piece in pieces[:6]:
+                normalized = self._clean(piece).lower()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    unique.append(self._clean(piece))
             if unique:
                 value = " ".join(unique)
-                # Keep the exact verified wording for existing contracts while
-                # still making field-only answers useful to customers.
                 answers.append(f"{title}: {value}" if title else value)
             if len(answers) >= 4:
                 break
@@ -98,19 +94,18 @@ class KnowledgeAnswerService:
             match = re.search(pattern, content, flags=re.IGNORECASE)
             if not match:
                 continue
-            value = re.sub(r"\s+", " ", match.group("value")).strip(" \t:-")
+            label = cls._clean(match.groupdict().get("label", ""))
+            value = cls._clean(match.groupdict().get("value", "")).strip(" \t:-")
             if not value:
                 continue
-            # Preserve a complete fact sentence when the source already
-            # provides one, instead of reducing it to only the value.
+            verb = match.groupdict().get("verb")
             if field == "fee":
-                prefix = re.search(r"(?:course\s*)?fee(?:s)?\s*[:\-]?\s*(?:is|are)?\s*" + re.escape(value) + r"$", match.group(0), flags=re.IGNORECASE)
-                if prefix and ":" not in match.group(0) and not re.search(r"\b(?:is|are)\b", match.group(0), flags=re.IGNORECASE):
-                    return f"Fee: {value}"
-                if re.search(r"\b(?:is|are)\b", match.group(0), flags=re.IGNORECASE):
-                    label = re.split(r"\b(?:is|are)\b", match.group(0), flags=re.IGNORECASE)[0].strip()
-                    return f"{label} {value}".strip()
-            return value
+                if verb:
+                    return f"{label} {verb} {value}.".replace("  ", " ")
+                return f"{label}: {value}"
+            if verb:
+                return f"{label} {verb} {value}.".replace("  ", " ")
+            return f"{label}: {value}"
         return None
 
     @classmethod
@@ -132,31 +127,13 @@ class KnowledgeAnswerService:
         return "We currently offer: " + ", ".join(names) + "." if names else None
 
     @classmethod
-    def _attach_supporting_details(cls, pieces: list[str], matching: list[str]) -> list[str]:
-        if len(matching) >= 2 or len(pieces) <= 1:
-            return matching
-        selected_indexes = [index for index, piece in enumerate(pieces) if piece in matching]
-        expanded = list(matching)
-        for index in selected_indexes:
-            for neighbor in (index - 1, index + 1):
-                if neighbor < 0 or neighbor >= len(pieces):
-                    continue
-                candidate = pieces[neighbor]
-                if candidate in expanded:
-                    continue
-                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", cls._clean(candidate).lower()))
-                if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
-                    expanded.append(candidate)
-        expanded.sort(key=lambda piece: pieces.index(piece))
-        return expanded
-
-    def _summary(self, items: list[object], response_style: str, company_wide: bool = False) -> str | None:
+    def _summary(cls, items: list[object], response_style: str, company_wide: bool = False) -> str | None:
         parts: list[str] = []
         max_chars = 2200 if response_style == "long" else 1500
         used = 0
         for item in items:
-            title = self._clean(getattr(item, "title", ""))
-            content = self._clean_preserve_lines(getattr(item, "content", ""))
+            title = cls._clean(getattr(item, "title", ""))
+            content = cls._clean_preserve_lines(getattr(item, "content", ""))
             if not content:
                 continue
             remaining = max_chars - used
@@ -170,9 +147,26 @@ class KnowledgeAnswerService:
                 break
         if not parts:
             return None
-        if company_wide:
-            return "Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)
-        return " ".join(parts)
+        return ("Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)) if company_wide else " ".join(parts)
+
+    @staticmethod
+    def _attach_supporting_details(pieces: list[str], matching: list[str]) -> list[str]:
+        if len(matching) >= 2 or len(pieces) <= 1:
+            return matching
+        selected_indexes = [index for index, piece in enumerate(pieces) if piece in matching]
+        expanded = list(matching)
+        for index in selected_indexes:
+            for neighbor in (index - 1, index + 1):
+                if neighbor < 0 or neighbor >= len(pieces):
+                    continue
+                candidate = pieces[neighbor]
+                if candidate in expanded:
+                    continue
+                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", KnowledgeAnswerService._clean(candidate).lower()))
+                if candidate_terms & KnowledgeAnswerService.SUPPORTING_DETAIL_TERMS:
+                    expanded.append(candidate)
+        expanded.sort(key=lambda piece: pieces.index(piece))
+        return expanded
 
     @staticmethod
     def _contains_fact(text: str, labels: set[str]) -> bool:

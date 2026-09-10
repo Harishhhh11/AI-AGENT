@@ -75,23 +75,22 @@ class KnowledgeAnswerService:
                 continue
             source_fact = self._source_fact_sentence(content, field)
             if source_fact:
-                normalized_fact = self._normalize_fact(source_fact)
-                if normalized_fact and normalized_fact in seen_facts:
+                # De-duplicate by the verified fact body, not by title. Two
+                # records can legitimately have different titles but contain
+                # the exact same customer-facing fact.
+                fact_key = self._fact_key(source_fact)
+                if fact_key in seen_facts:
                     continue
                 answer_text = f"{title}: {source_fact}" if title else source_fact
-                normalized_answer = self._normalize_fact(answer_text)
-                if normalized_answer in seen_facts:
-                    continue
-                seen_facts.add(normalized_fact)
-                seen_facts.add(normalized_answer)
                 answers.append(answer_text)
+                seen_facts.add(fact_key)
             else:
                 pieces = self._pieces(content)
                 matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
                 for piece in self._attach_supporting_details(pieces, matching)[:6]:
-                    normalized = self._normalize_fact(piece)
-                    if normalized and normalized not in seen_facts:
-                        seen_facts.add(normalized)
+                    fact_key = self._fact_key(piece)
+                    if fact_key and fact_key not in seen_facts:
+                        seen_facts.add(fact_key)
                         answers.append(f"{title}: {piece}" if title else piece)
             if len(answers) >= 4:
                 break
@@ -106,13 +105,9 @@ class KnowledgeAnswerService:
             extracted = cls._extract_field(piece, field)
             if not extracted:
                 continue
-            # For timing/duration/mode answers, remove metadata prefixes such as
-            # "Class Schedule:" and return the verified value itself.
             if field in {"timings", "duration", "mode"}:
                 result = extracted
             else:
-                # Preserve the original verified sentence for fee/discount/contact
-                # facts so wording such as "The fee is ..." remains intact.
                 result = piece.strip()
             if index + 1 < len(pieces):
                 candidate = pieces[index + 1]
@@ -141,11 +136,16 @@ class KnowledgeAnswerService:
         return None
 
     @classmethod
-    def _normalize_fact(cls, value: str) -> str:
+    def _fact_key(cls, value: str) -> str:
         text = cls._clean(value).lower()
+        text = re.sub(r"^[^:]+:\s*", "", text)
         text = re.sub(r"^the\s+", "", text)
         text = re.sub(r"\s+", " ", text)
         return text.rstrip(".")
+
+    @classmethod
+    def _normalize_fact(cls, value: str) -> str:
+        return cls._fact_key(value)
 
     @classmethod
     def _course_catalog(cls, items: list[object]) -> str | None:

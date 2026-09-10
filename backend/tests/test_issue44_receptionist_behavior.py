@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import pytest
-
 from app.services.chat_service import ChatService
 from app.services.context_service import ContextService
 from app.services.knowledge_answer_service import KnowledgeAnswerService

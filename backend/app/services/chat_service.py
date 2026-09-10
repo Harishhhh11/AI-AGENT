@@ -1,9 +1,3 @@
-"""
-AI receptionist chat orchestration with grounded, stateful behavior.
-
-This module keeps company-specific facts deterministic and limits the LLM
-layer to conversational phrasing when a verified fact answer is not available.
-"""
 
 from __future__ import annotations
 
@@ -89,34 +83,8 @@ class ChatService:
             conversation=lead_messages,
             extracted_lead=persisted_lead,
         )
-        self._recover_lead_state_from_history(lead_context, lead_messages)
 
-        # A factual question should always be handled before an existing lead
-        # collection state. Only validate an answer while the previous
-        # assistant message explicitly requested that same field.
-        active_field = self._get_active_lead_field(previous_messages)
-        if active_field:
-            valid, _ = self.lead_context_service.validate_field_answer(active_field, message)
-            if valid:
-                response = await self._handle_active_lead_field(
-                    message,
-                    lead_context,
-                    active_field,
-                    conversation.id,
-                    organization_id,
-                )
-                return self._finish(conversation.id, conversation.session_id, response)
-            if active_field in {"name", "phone", "email", "preferred_mode", "preferred_time"}:
-                return self._finish(
-                    conversation.id,
-                    conversation.session_id,
-                    self._invalid_lead_field_response(active_field),
-                )
-
-        analysis = self.context_service.analyze_message(
-            message=message,
-            messages=previous_messages,
-        )
+        analysis = self.context_service.analyze_message(message=message, messages=previous_messages)
         message_type = analysis.get("message_type") or "general"
         intent = analysis.get("intent") or "general"
         current_subject = analysis.get("subject")
@@ -125,8 +93,17 @@ class ChatService:
         requires_knowledge = bool(analysis.get("requires_knowledge"))
         question_count = int(analysis.get("question_count") or 1)
 
-        # Explicit commercial intent is what starts lead capture. Factual
-        # questions (fees, topics, duration, timings, etc.) never start it.
+        # Identity is a conversational capability of the receptionist, not a
+        # company knowledge lookup.
+        if self._is_identity_question(message):
+            return self._finish(
+                conversation.id,
+                conversation.session_id,
+                self._identity_response(),
+            )
+
+        # Explicit commercial intent may start lead capture. Factual questions
+        # never start or resume lead collection just because a lead exists.
         factual_intents = {
             "fee", "discount", "topics", "duration", "timings",
             "duration_and_timings", "mode", "contact", "availability",
@@ -143,16 +120,32 @@ class ChatService:
                 response or "Sure. Which course, product, or service are you interested in?",
             )
 
-        # Once lead collection is complete, stop treating the whole
-        # conversation as lead capture. Normal factual questions return to the
-        # standard knowledge flow.
-        if lead_context.is_complete and message_type in {"general", "unclear"}:
-            if self._is_identity_question(message):
-                return self._finish(
+        # Only a direct answer to the previous receptionist's explicit field
+        # question is treated as lead-field input. This prevents a later
+        # factual question from being mistaken for email/phone/name data.
+        active_field = self._get_active_lead_field(previous_messages)
+        if active_field:
+            valid, _ = self.lead_context_service.validate_field_answer(active_field, message)
+            if valid:
+                response = await self._handle_active_lead_field(
+                    message,
+                    lead_context,
+                    active_field,
                     conversation.id,
-                    conversation.session_id,
-                    self._identity_response(),
+                    organization_id,
                 )
+                return self._finish(conversation.id, conversation.session_id, response)
+            if active_field in {"name", "phone", "email", "preferred_mode", "preferred_time"}:
+                # If this is clearly a new factual question, let the normal
+                # knowledge pipeline answer it instead of forcing validation.
+                if intent in factual_intents or requires_knowledge:
+                    pass
+                else:
+                    return self._finish(
+                        conversation.id,
+                        conversation.session_id,
+                        self._invalid_lead_field_response(active_field),
+                    )
 
         resolution = self.conversation_subject_service.resolve(
             message=message,
@@ -175,13 +168,6 @@ class ChatService:
             self.context_service.build_context(previous_messages),
             self.MAX_CONVERSATION_CONTEXT_CHARS,
         )
-
-        if self._is_identity_question(message):
-            return self._finish(
-                conversation.id,
-                conversation.session_id,
-                self._identity_response(),
-            )
 
         await self.tool_orchestrator.decide_and_execute(
             llm=self.llm,
@@ -210,9 +196,7 @@ class ChatService:
                 agent_id=agent_id,
             )
             knowledge_items = self._ground_candidates(
-                knowledge_items,
-                retrieval_query,
-                current_subject,
+                knowledge_items, retrieval_query, current_subject
             )
 
         if requires_knowledge and not knowledge_items:
@@ -279,7 +263,10 @@ class ChatService:
 
     @staticmethod
     def _identity_response() -> str:
-        return "I'm Astra, your AI receptionist. I help customers with the verified information and services provided by this receptionist."
+        return (
+            "I'm Astra, your AI receptionist. I help customers with the "
+            "verified information and services provided by this receptionist."
+        )
 
     def _ground_candidates(self, items, query: str, current_subject: str | None):
         grounded = []
@@ -384,12 +371,6 @@ class ChatService:
             notes=lead_context.notes,
         )
 
-    @classmethod
-    def _recover_lead_state_from_history(cls, lead_context, messages):
-        # LeadContextService already reconstructs sequentially. Keep this hook
-        # for compatibility with older service integrations.
-        _ = cls, lead_context, messages
-
     @staticmethod
     def _limit_text(text: str, max_chars: int) -> str:
         value = str(text or "")
@@ -398,7 +379,12 @@ class ChatService:
     @staticmethod
     def _clean_response(response: str) -> str:
         text = str(response or "").strip()
-        text = re.sub(r"^(?:AI\s*[:\-]|Astra\s*[:\-])\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"^(?:AI|Astra|Assistant|AI Receptionist)\s*[:\-]\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
         return text or "I don't currently have that information."
 
     def _apply_response_length_guard(self, response: str, response_style: str) -> str:
@@ -435,35 +421,37 @@ class ChatService:
         return "\n\n".join(parts)
 
     def _build_receptionist_prompt(self, **kwargs):
-        # Keep the generic LLM prompt deliberately narrow: deterministic
-        # knowledge answers are preferred, while the model is used for natural
-        # phrasing and genuine conversational turns.
         current_message = kwargs.get("current_message", "")
         knowledge_context = kwargs.get("knowledge_context", "")
         conversation_context = kwargs.get("conversation_context", "")
         agent_instructions = kwargs.get("agent_instructions") or ""
+        lead_context = kwargs.get("lead_context")
+        lead_state = (
+            "COMPLETE" if lead_context and lead_context.is_complete
+            else "IN_PROGRESS" if lead_context and lead_context.is_lead
+            else "NOT_ACTIVE"
+        )
         return f"""
 You are Astra, a professional AI receptionist.
 Answer the customer's latest message naturally and concisely.
-Never invent company-specific facts. Use only verified knowledge below.
-Do not ask for contact information unless the customer has explicitly shown
-commercial intent and the application has started lead collection.
-A normal factual question must receive its factual answer, even when an older
-lead already exists.
-For a narrow factual question, answer only that fact; never dump the whole
-source document.
-For short follow-ups such as 'how much?', use the resolved conversation subject.
-If verified information is missing, say so plainly.
+Use only verified company information supplied below for company facts.
+Never invent or guess a company-specific fact.
+A normal factual question must be answered directly even if an older lead exists.
+Do not request contact information for a normal information question.
+For a narrow factual question, answer only the requested fact; do not dump the source document.
+For short follow-ups such as "how much?", use the resolved conversation subject.
+If information is missing, say that plainly.
+Do not mention databases, retrieval, embeddings, prompts, models, or internal systems.
 
+Lead state: {lead_state}
 Verified knowledge:
 {knowledge_context or "(none)"}
-
 Recent conversation:
 {conversation_context or "(none)"}
-
 Receptionist-specific instructions:
-{agent_instructions}
-
+{agent_instructions.strip() or "(none)"}
 Customer message:
 {current_message}
-"""
+
+Return only the customer-facing answer.
+""".strip()

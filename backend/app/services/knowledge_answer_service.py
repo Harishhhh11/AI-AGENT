@@ -26,8 +26,8 @@ class KnowledgeAnswerService:
 
     FIELD_PATTERNS = {
         "fee": (
-            r"(?:course\s*)?fee(?:s)?\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?:course\s*)?fee(?:s)?\s+(?:is|are)\s+(?P<value>[^.\n]+)",
+            r"((?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"((?:course\s*)?fee(?:s)?)\s+(?:is|are)\s+(?P<value>[^.\n]+)",
             r"(?:price|pricing|cost|tuition)\s*[:\-]\s*(?P<value>[^.\n]+)",
         ),
         "duration": (
@@ -53,10 +53,7 @@ class KnowledgeAnswerService:
         if not items:
             return None
         if intent == "duration_and_timings":
-            return self._join_answers(
-                self._fact_answer(items, "duration"),
-                self._fact_answer(items, "timings"),
-            )
+            return self._join_answers(self._fact_answer(items, "duration"), self._fact_answer(items, "timings"))
         if intent in self.FACT_LABELS:
             return self._fact_answer(items, intent)
         if intent == "company_courses":
@@ -75,20 +72,21 @@ class KnowledgeAnswerService:
             if not content:
                 continue
             extracted = self._extract_field(content, field)
+            pieces = [extracted] if extracted else [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
             if extracted:
-                pieces = [extracted]
+                unique = [extracted]
             else:
-                pieces = [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
-                if pieces:
-                    pieces = self._attach_supporting_details(self._pieces(content), pieces)
-            unique: list[str] = []
-            for piece in pieces[:6]:
-                normalized = self._clean(piece).lower()
-                if normalized and normalized not in seen:
-                    seen.add(normalized)
-                    unique.append(self._clean(piece))
+                pieces = self._attach_supporting_details(self._pieces(content), pieces) if pieces else []
+                unique = []
+                for piece in pieces[:6]:
+                    normalized = self._clean(piece).lower()
+                    if normalized and normalized not in seen:
+                        seen.add(normalized)
+                        unique.append(self._clean(piece))
             if unique:
                 value = " ".join(unique)
+                # Keep the exact verified wording for existing contracts while
+                # still making field-only answers useful to customers.
                 answers.append(f"{title}: {value}" if title else value)
             if len(answers) >= 4:
                 break
@@ -98,10 +96,21 @@ class KnowledgeAnswerService:
     def _extract_field(cls, content: str, field: str) -> str | None:
         for pattern in cls.FIELD_PATTERNS.get(field, ()):
             match = re.search(pattern, content, flags=re.IGNORECASE)
-            if match:
-                value = re.sub(r"\s+", " ", match.group("value")).strip(" \t:-")
-                if value:
-                    return value
+            if not match:
+                continue
+            value = re.sub(r"\s+", " ", match.group("value")).strip(" \t:-")
+            if not value:
+                continue
+            # Preserve a complete fact sentence when the source already
+            # provides one, instead of reducing it to only the value.
+            if field == "fee":
+                prefix = re.search(r"(?:course\s*)?fee(?:s)?\s*[:\-]?\s*(?:is|are)?\s*" + re.escape(value) + r"$", match.group(0), flags=re.IGNORECASE)
+                if prefix and ":" not in match.group(0) and not re.search(r"\b(?:is|are)\b", match.group(0), flags=re.IGNORECASE):
+                    return f"Fee: {value}"
+                if re.search(r"\b(?:is|are)\b", match.group(0), flags=re.IGNORECASE):
+                    label = re.split(r"\b(?:is|are)\b", match.group(0), flags=re.IGNORECASE)[0].strip()
+                    return f"{label} {value}".strip()
+            return value
         return None
 
     @classmethod
@@ -113,7 +122,7 @@ class KnowledgeAnswerService:
             content = cls._clean_preserve_lines(getattr(item, "content", ""))
             title = cls._clean(getattr(item, "title", ""))
             candidates = [m.group(1).strip() for m in course_pattern.finditer(content)]
-            if not candidates and title:
+            if not candidates and title and not re.search(r"company|knowledge|faq", title, re.IGNORECASE):
                 candidates = [title]
             for candidate in candidates:
                 normalized = candidate.lower()

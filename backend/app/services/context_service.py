@@ -118,19 +118,24 @@ class ContextService:
             return "unclear"
         if self.is_negative_confirmation(message):
             return "negative_confirmation"
-        if self.is_confirmation(message) and normalized in self.CONFIRMATION_WORDS:
-            return "confirmation"
+        if self._is_company_wide_question(message):
+            return "company_general"
         if self._contains_any_phrase(message, self.COMPANY_INFO_PHRASES):
             return "company_general"
         if self._is_general_question(message):
             return "general"
-        if self._is_company_wide_question(message):
-            return "company_general"
+
+        # Explicit subject terms always win, except for the special terse follow-ups
+        # whose wording is intentionally context-dependent.
+        if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
+            return "follow_up"
+        if self._looks_like_follow_up(message):
+            return "follow_up"
         subject_terms = self._extract_subject_terms(message)
         if subject_terms:
             return "new_topic"
-        if self._looks_like_follow_up(message):
-            return "follow_up"
+        if self.is_confirmation(message) and normalized in self.CONFIRMATION_WORDS:
+            return "confirmation"
         if len(normalized.split()) <= 3:
             return "follow_up"
         return "general"
@@ -143,7 +148,7 @@ class ContextService:
         explicit_subject = self.extract_subject(message)
         if explicit_subject:
             subject = explicit_subject
-        elif message_type in {"follow_up", "confirmation"}:
+        elif message_type in {"follow_up", "confirmation", "company_general"}:
             subject = previous_subject
         else:
             subject = None
@@ -278,10 +283,12 @@ class ContextService:
             if index > 0 and normalized[index - 1]["role"] == "assistant" and self._is_lead_detail_question(normalized[index - 1]["content"]):
                 continue
             message_type = self.classify_message(content)
-            if message_type == "new_topic":
+            if message_type == "new_topic" or message_type == "company_general":
                 subject = self.extract_subject(content)
                 if subject:
                     return subject
+            # Context-bearing follow-up phrases should inherit from the latest
+            # explicit topic rather than becoming their own subject.
         return None
 
     @staticmethod
@@ -310,6 +317,9 @@ class ContextService:
         if not normalized:
             return []
         if self._is_general_question(message) or self._is_company_wide_question(message):
+            return []
+        # A known follow-up phrase is context-only and must not become a subject.
+        if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
             return []
         tokens = re.findall(r"[A-Za-z0-9+#.-]+", normalized)
         terms = []

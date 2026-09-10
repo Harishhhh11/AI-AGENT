@@ -26,10 +26,10 @@ class KnowledgeAnswerService:
 
     FIELD_PATTERNS = {
         "fee": (
-            r"(?P<label>(?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?P<label>(?:course\s*)?fee(?:s)?)\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
-            r"(?P<label>(?:price|pricing|cost|tuition))\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?P<label>(?:price|pricing|cost|tuition))\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?fee(?:s)?)\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?(?:price|pricing|cost|tuition))\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?(?:price|pricing|cost|tuition))\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
         ),
         "duration": (
             r"(?P<label>duration)\s*[:\-]\s*(?P<value>[^.\n]+)",
@@ -66,7 +66,8 @@ class KnowledgeAnswerService:
 
     def _fact_answer(self, items: list[object], field: str) -> str | None:
         answers: list[str] = []
-        seen: set[str] = set()
+        seen_titles: set[str] = set()
+        seen_facts: set[str] = set()
         labels = self.FACT_LABELS[field]
         for item in items:
             title = self._clean(getattr(item, "title", ""))
@@ -74,16 +75,27 @@ class KnowledgeAnswerService:
             if not content:
                 continue
             extracted = self._extract_field(content, field)
-            pieces = [extracted] if extracted else [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
-            unique: list[str] = []
-            for piece in pieces[:6]:
-                normalized = self._clean(piece).lower()
-                if normalized and normalized not in seen:
-                    seen.add(normalized)
-                    unique.append(self._clean(piece))
-            if unique:
-                value = " ".join(unique)
-                answers.append(f"{title}: {value}" if title else value)
+            if extracted:
+                fact_key = self._normalize_fact(extracted)
+                if fact_key in seen_facts:
+                    continue
+                seen_facts.add(fact_key)
+                if self._contains_supporting_sentence(content, extracted):
+                    extracted = self._append_supporting_sentences(content, extracted, field)
+                answer = f"{title}: {extracted}" if title else extracted
+                title_key = title.lower()
+                if title_key and title_key in seen_titles and answer in answers:
+                    continue
+                if title_key:
+                    seen_titles.add(title_key)
+                answers.append(answer)
+            else:
+                pieces = [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
+                for piece in self._attach_supporting_details(self._pieces(content), pieces)[:6]:
+                    normalized = self._normalize_fact(piece)
+                    if normalized and normalized not in seen_facts:
+                        seen_facts.add(normalized)
+                        answers.append(f"{title}: {piece}" if title else piece)
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
@@ -99,14 +111,44 @@ class KnowledgeAnswerService:
             if not value:
                 continue
             verb = match.groupdict().get("verb")
-            if field == "fee":
-                if verb:
-                    return f"{label} {verb} {value}.".replace("  ", " ")
-                return f"{label}: {value}"
             if verb:
                 return f"{label} {verb} {value}.".replace("  ", " ")
             return f"{label}: {value}"
         return None
+
+    @classmethod
+    def _contains_supporting_sentence(cls, content: str, extracted: str) -> bool:
+        pieces = cls._pieces(content)
+        normalized = cls._normalize_fact(extracted)
+        if not normalized:
+            return False
+        for piece in pieces:
+            if normalized in cls._normalize_fact(piece):
+                return len(pieces) > 1
+        return False
+
+    @classmethod
+    def _append_supporting_sentences(cls, content: str, extracted: str, field: str) -> str:
+        pieces = cls._pieces(content)
+        if not pieces:
+            return extracted
+        index = next((i for i, p in enumerate(pieces) if cls._normalize_fact(extracted) in cls._normalize_fact(p)), None)
+        if index is None:
+            return extracted
+        result = [pieces[index]]
+        for neighbor in (index + 1,):
+            if neighbor < len(pieces):
+                candidate = pieces[neighbor]
+                terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
+                if terms & cls.SUPPORTING_DETAIL_TERMS:
+                    result.append(candidate)
+        return " ".join(result)
+
+    @classmethod
+    def _normalize_fact(cls, value: str) -> str:
+        text = cls._clean(value).lower()
+        text = re.sub(r"^the\s+", "", text)
+        return text.rstrip(".")
 
     @classmethod
     def _course_catalog(cls, items: list[object]) -> str | None:
@@ -149,8 +191,8 @@ class KnowledgeAnswerService:
             return None
         return ("Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)) if company_wide else " ".join(parts)
 
-    @staticmethod
-    def _attach_supporting_details(pieces: list[str], matching: list[str]) -> list[str]:
+    @classmethod
+    def _attach_supporting_details(cls, pieces: list[str], matching: list[str]) -> list[str]:
         if len(matching) >= 2 or len(pieces) <= 1:
             return matching
         selected_indexes = [index for index, piece in enumerate(pieces) if piece in matching]
@@ -162,8 +204,8 @@ class KnowledgeAnswerService:
                 candidate = pieces[neighbor]
                 if candidate in expanded:
                     continue
-                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", KnowledgeAnswerService._clean(candidate).lower()))
-                if candidate_terms & KnowledgeAnswerService.SUPPORTING_DETAIL_TERMS:
+                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", cls._clean(candidate).lower()))
+                if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
                     expanded.append(candidate)
         expanded.sort(key=lambda piece: pieces.index(piece))
         return expanded

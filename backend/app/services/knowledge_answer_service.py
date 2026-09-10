@@ -6,7 +6,7 @@ import re
 
 
 class KnowledgeAnswerService:
-    """Build customer-facing answers only from retrieved, tenant-scoped knowledge."""
+    """Build concise customer-facing answers from retrieved, tenant-scoped facts."""
 
     FACT_LABELS = {
         "fee": {"fee", "fees", "price", "pricing", "cost", "costs", "tuition"},
@@ -24,49 +24,172 @@ class KnowledgeAnswerService:
         "registration", "admission", "admissions", "batch", "batches", "weekday", "weekend",
     }
 
+    FIELD_PATTERNS = {
+        "fee": (
+            r"(?P<label>(?:the\s+)?(?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?fee(?:s)?)\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?(?:price|pricing|cost|tuition))\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:the\s+)?(?:course\s*)?(?:price|pricing|cost|tuition))\s+(?P<verb>is|are)\s+(?P<value>[^.\n]+)",
+        ),
+        "duration": (
+            r"(?P<label>duration)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>duration)\s+(?P<verb>is|of)\s+(?P<value>[^.\n]+)",
+        ),
+        "timings": (
+            r"(?P<label>(?:class\s+)?schedule)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:class\s+)?timings?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:class\s+)?timings?)\s+(?P<verb>are|is)\s+(?P<value>[^.\n]+)",
+        ),
+        "mode": (
+            r"(?P<label>training\s+mode)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>mode)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>mode)\s+(?P<verb>is)\s+(?P<value>[^.\n]+)",
+        ),
+        "contact": (
+            r"(?P<label>contact)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:phone|mobile|email|address|location))\s*[:\-]\s*(?P<value>[^.\n]+)",
+        ),
+    }
+
     def answer(self, *, items: list[object], intent: str, subject: str | None, response_style: str) -> str | None:
         if not items:
             return None
         if intent == "duration_and_timings":
-            return self._join_answers(
-                self._fact_answer(items, self.FACT_LABELS["duration"]),
-                self._fact_answer(items, self.FACT_LABELS["timings"]),
-            )
+            return self._join_answers(self._fact_answer(items, "duration"), self._fact_answer(items, "timings"))
         if intent in self.FACT_LABELS:
-            return self._fact_answer(items, self.FACT_LABELS[intent])
-        if intent in {"details", "company_courses", "topics", "availability", "company_information"} or response_style == "long":
-            return self._summary(items, response_style, company_wide=intent in {"company_courses", "availability", "company_information"})
+            return self._fact_answer(items, intent)
+        if intent == "company_courses":
+            return self._course_catalog(items)
+        if intent in {"details", "topics", "availability", "company_information"} or response_style == "long":
+            return self._summary(items, response_style, company_wide=intent in {"availability", "company_information"})
         return None
 
-    def _fact_answer(self, items: list[object], labels: set[str]) -> str | None:
+    def _fact_answer(self, items: list[object], field: str) -> str | None:
         answers: list[str] = []
-        seen: set[str] = set()
+        seen_facts: set[str] = set()
+        labels = self.FACT_LABELS[field]
         for item in items:
             title = self._clean(getattr(item, "title", ""))
             content = self._clean_preserve_lines(getattr(item, "content", ""))
             if not content:
                 continue
-            pieces = self._pieces(content)
-            matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
-            if not matching and self._contains_fact(content, labels):
-                matching = [content]
-            if matching:
-                matching = self._attach_supporting_details(pieces, matching)
-            unique: list[str] = []
-            for piece in matching[:6]:
-                normalized = self._clean(piece).lower()
-                if normalized and normalized not in seen:
-                    seen.add(normalized)
-                    unique.append(self._clean(piece))
-            if unique:
-                answers.append(f"{title}: {' '.join(unique)}" if title else " ".join(unique))
+            source_fact = self._source_fact_sentence(content, field)
+            if source_fact:
+                # De-duplicate by the verified fact body, not by title. Two
+                # records can legitimately have different titles but contain
+                # the exact same customer-facing fact.
+                fact_key = self._fact_key(source_fact)
+                if fact_key in seen_facts:
+                    continue
+                answer_text = f"{title}: {source_fact}" if title else source_fact
+                answers.append(answer_text)
+                seen_facts.add(fact_key)
+            else:
+                pieces = self._pieces(content)
+                matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
+                for piece in self._attach_supporting_details(pieces, matching)[:6]:
+                    fact_key = self._fact_key(piece)
+                    if fact_key and fact_key not in seen_facts:
+                        seen_facts.add(fact_key)
+                        answers.append(f"{title}: {piece}" if title else piece)
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
 
     @classmethod
+    def _source_fact_sentence(cls, content: str, field: str) -> str | None:
+        pieces = cls._pieces(content)
+        for index, piece in enumerate(pieces):
+            if not cls._contains_fact(piece, cls.FACT_LABELS[field]):
+                continue
+            extracted = cls._extract_field(piece, field)
+            if not extracted:
+                continue
+            if field in {"timings", "duration", "mode"}:
+                result = extracted
+            else:
+                result = piece.strip()
+            if index + 1 < len(pieces):
+                candidate = pieces[index + 1]
+                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
+                if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
+                    result = f"{result} {candidate.strip()}"
+            return result.strip()
+        return None
+
+    @classmethod
+    def _extract_field(cls, content: str, field: str) -> str | None:
+        for pattern in cls.FIELD_PATTERNS.get(field, ()):
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if not match:
+                continue
+            label = cls._clean(match.groupdict().get("label", ""))
+            value = cls._clean(match.groupdict().get("value", "")).strip(" \t:-")
+            if not value:
+                continue
+            verb = match.groupdict().get("verb")
+            if verb:
+                return f"{label} {verb} {value}.".replace("  ", " ")
+            if field in {"timings", "duration", "mode"}:
+                return value.rstrip(".")
+            return f"{label} {value}".strip()
+        return None
+
+    @classmethod
+    def _fact_key(cls, value: str) -> str:
+        text = cls._clean(value).lower()
+        text = re.sub(r"^[^:]+:\s*", "", text)
+        text = re.sub(r"^the\s+", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.rstrip(".")
+
+    @classmethod
+    def _normalize_fact(cls, value: str) -> str:
+        return cls._fact_key(value)
+
+    @classmethod
+    def _course_catalog(cls, items: list[object]) -> str | None:
+        names: list[str] = []
+        seen: set[str] = set()
+        course_pattern = re.compile(r"(?:course|program|training)\s*[:\-]\s*([^\n.]+)", re.IGNORECASE)
+        for item in items:
+            content = cls._clean_preserve_lines(getattr(item, "content", ""))
+            title = cls._clean(getattr(item, "title", ""))
+            candidates = [m.group(1).strip() for m in course_pattern.finditer(content)]
+            if not candidates and title and not re.search(r"company|knowledge|faq", title, re.IGNORECASE):
+                candidates = [title]
+            for candidate in candidates:
+                normalized = candidate.lower()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    names.append(candidate)
+        return "We currently offer: " + ", ".join(names) + "." if names else None
+
+    @classmethod
+    def _summary(cls, items: list[object], response_style: str, company_wide: bool = False) -> str | None:
+        parts: list[str] = []
+        max_chars = 2200 if response_style == "long" else 1500
+        used = 0
+        for item in items:
+            title = cls._clean(getattr(item, "title", ""))
+            content = cls._clean_preserve_lines(getattr(item, "content", ""))
+            if not content:
+                continue
+            remaining = max_chars - used
+            if remaining <= 0:
+                break
+            excerpt = content if len(content) <= remaining else content[: max(0, remaining - 3)].rstrip() + "..."
+            block = f"{title}: {excerpt}" if title else excerpt
+            parts.append(f"• {block}" if company_wide else block)
+            used += len(block) + 2
+            if len(parts) >= 6:
+                break
+        if not parts:
+            return None
+        return ("Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)) if company_wide else " ".join(parts)
+
+    @classmethod
     def _attach_supporting_details(cls, pieces: list[str], matching: list[str]) -> list[str]:
-        """Keep adjacent facts that clarify a verified answer instead of truncating them."""
         if len(matching) >= 2 or len(pieces) <= 1:
             return matching
         selected_indexes = [index for index, piece in enumerate(pieces) if piece in matching]
@@ -84,37 +207,10 @@ class KnowledgeAnswerService:
         expanded.sort(key=lambda piece: pieces.index(piece))
         return expanded
 
-    def _summary(self, items: list[object], response_style: str, company_wide: bool = False) -> str | None:
-        parts: list[str] = []
-        max_chars = 2200 if response_style == "long" else 1500
-        used = 0
-        for item in items:
-            title = self._clean(getattr(item, "title", ""))
-            content = self._clean_preserve_lines(getattr(item, "content", ""))
-            if not content:
-                continue
-            remaining = max_chars - used
-            if remaining <= 0:
-                break
-            excerpt = content if len(content) <= remaining else content[: max(0, remaining - 3)].rstrip() + "..."
-            block = f"{title}: {excerpt}" if title else excerpt
-            parts.append(f"• {block}" if company_wide else block)
-            used += len(block) + 2
-            if len(parts) >= 6:
-                break
-        if not parts:
-            return None
-        if company_wide:
-            return "Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)
-        return " ".join(parts)
-
     @staticmethod
     def _contains_fact(text: str, labels: set[str]) -> bool:
         normalized = (text or "").lower()
-        return any(
-            re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized)
-            for label in labels
-        )
+        return any(re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized) for label in labels)
 
     @staticmethod
     def _join_answers(first: str | None, second: str | None) -> str | None:

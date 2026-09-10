@@ -24,6 +24,13 @@ class KnowledgeAnswerService:
         "registration", "admission", "admissions", "batch", "batches", "weekday", "weekend",
     }
 
+    COURSE_HEADING_PATTERN = re.compile(
+        r"(?:^|\n|[.;])\s*(?:course|program|training|service|product)\s*(?:name|title)?\s*[:\-]\s*([^\n.;]+)",
+        re.IGNORECASE,
+    )
+
+    TOPIC_HEADING_TERMS = {"topic", "topics", "syllabus", "curriculum", "covered", "cover", "content"}
+
     FIELD_PATTERNS = {
         "fee": (
             r"(?P<label>(?:the\s+)?(?:course\s*)?fee(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
@@ -60,7 +67,9 @@ class KnowledgeAnswerService:
             return self._fact_answer(items, intent)
         if intent == "company_courses":
             return self._course_catalog(items)
-        if intent in {"details", "topics", "availability", "company_information"} or response_style == "long":
+        if intent == "topics":
+            return self._topics_answer(items)
+        if intent in {"details", "availability", "company_information"} or response_style == "long":
             return self._summary(items, response_style, company_wide=intent in {"availability", "company_information"})
         return None
 
@@ -75,9 +84,6 @@ class KnowledgeAnswerService:
                 continue
             source_fact = self._source_fact_sentence(content, field)
             if source_fact:
-                # De-duplicate by the verified fact body, not by title. Two
-                # records can legitimately have different titles but contain
-                # the exact same customer-facing fact.
                 fact_key = self._fact_key(source_fact)
                 if fact_key in seen_facts:
                     continue
@@ -105,10 +111,7 @@ class KnowledgeAnswerService:
             extracted = cls._extract_field(piece, field)
             if not extracted:
                 continue
-            if field in {"timings", "duration", "mode"}:
-                result = extracted
-            else:
-                result = piece.strip()
+            result = extracted if field in {"timings", "duration", "mode"} else piece.strip()
             if index + 1 < len(pieces):
                 candidate = pieces[index + 1]
                 candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
@@ -151,19 +154,83 @@ class KnowledgeAnswerService:
     def _course_catalog(cls, items: list[object]) -> str | None:
         names: list[str] = []
         seen: set[str] = set()
-        course_pattern = re.compile(r"(?:course|program|training)\s*[:\-]\s*([^\n.]+)", re.IGNORECASE)
         for item in items:
             content = cls._clean_preserve_lines(getattr(item, "content", ""))
             title = cls._clean(getattr(item, "title", ""))
-            candidates = [m.group(1).strip() for m in course_pattern.finditer(content)]
-            if not candidates and title and not re.search(r"company|knowledge|faq", title, re.IGNORECASE):
+            candidates = [match.group(1).strip() for match in cls.COURSE_HEADING_PATTERN.finditer(content)]
+            if not candidates and title and not re.search(r"company|knowledge|faq|general", title, re.IGNORECASE):
                 candidates = [title]
             for candidate in candidates:
+                candidate = re.sub(r"\s+", " ", candidate).strip(" -:")
                 normalized = candidate.lower()
                 if normalized and normalized not in seen:
                     seen.add(normalized)
                     names.append(candidate)
-        return "We currently offer: " + ", ".join(names) + "." if names else None
+        if names:
+            return "We currently offer: " + ", ".join(names) + "."
+
+        fallback: list[str] = []
+        for item in items:
+            title = cls._clean(getattr(item, "title", ""))
+            if title and not re.search(r"company|knowledge|faq|general", title, re.IGNORECASE):
+                normalized = title.lower()
+                if normalized not in seen:
+                    seen.add(normalized)
+                    fallback.append(title)
+        return "We currently offer: " + ", ".join(fallback) + "." if fallback else None
+
+    @classmethod
+    def _topics_answer(cls, items: list[object]) -> str | None:
+        answers: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            title = cls._clean(getattr(item, "title", ""))
+            content = cls._clean_preserve_lines(getattr(item, "content", ""))
+            if not content:
+                continue
+            pieces = cls._pieces(content)
+            for index, piece in enumerate(pieces):
+                if not cls._contains_fact(piece, cls.TOPIC_HEADING_TERMS):
+                    continue
+                candidate = piece
+                match = re.search(r"(?:topics?|syllabus|curriculum|content)\s*[:\-]\s*(.+)", piece, re.IGNORECASE)
+                if match:
+                    candidate = match.group(1).strip()
+                if candidate.lower().startswith(("what is covered", "topics covered")):
+                    candidate = piece
+                dedupe = cls._fact_key(candidate)
+                if dedupe and dedupe not in seen:
+                    seen.add(dedupe)
+                    answers.append(f"{title}: {candidate}" if title else candidate)
+                if index + 1 < len(pieces):
+                    next_piece = pieces[index + 1]
+                    if not cls._contains_fact(next_piece, cls.FACT_LABELS["fee"]) and cls._looks_like_topic_continuation(next_piece):
+                        dedupe = cls._fact_key(next_piece)
+                        if dedupe and dedupe not in seen:
+                            seen.add(dedupe)
+                            answers.append(f"{title}: {next_piece}" if title else next_piece)
+            if not answers and title:
+                # The entire record may be a topic syllabus without an explicit
+                # "Topics:" label. Avoid returning unrelated fees/contact facts.
+                topic_lines = [piece for piece in pieces if cls._looks_like_topic_continuation(piece)]
+                if topic_lines:
+                    for piece in topic_lines[:6]:
+                        dedupe = cls._fact_key(piece)
+                        if dedupe and dedupe not in seen:
+                            seen.add(dedupe)
+                            answers.append(f"{title}: {piece}")
+            if len(answers) >= 8:
+                break
+        return " ".join(answers) if answers else None
+
+    @classmethod
+    def _looks_like_topic_continuation(cls, piece: str) -> bool:
+        lower = cls._clean(piece).lower()
+        return any(token in lower for token in (
+            "variable", "function", "oop", "object", "class", "loop", "string", "list", "tuple", "dictionary",
+            "api", "project", "database", "sql", "power bi", "excel", "python", "java", "javascript", "react",
+            "django", "flask", "fastapi", "machine learning", "data analysis", "programming",
+        ))
 
     @classmethod
     def _summary(cls, items: list[object], response_style: str, company_wide: bool = False) -> str | None:

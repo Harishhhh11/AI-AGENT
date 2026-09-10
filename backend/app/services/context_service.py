@@ -110,7 +110,6 @@ class ContextService:
         self.message_limit = max(1, message_limit)
 
     def classify_message(self, message: str) -> str:
-        message = (message or "").strip()
         normalized = self._normalize_text(message)
         if not normalized:
             return "unclear"
@@ -122,20 +121,17 @@ class ContextService:
             return "company_general"
         if self._contains_any_phrase(message, self.COMPANY_INFO_PHRASES):
             return "company_general"
-        if self._is_general_question(message):
-            return "general"
-
-        # Explicit subject terms always win, except for the special terse follow-ups
-        # whose wording is intentionally context-dependent.
         if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
             return "follow_up"
+        if self._is_general_question(message):
+            return "general"
         if self._looks_like_follow_up(message):
             return "follow_up"
+        if self.is_confirmation(message) and normalized in self.CONFIRMATION_WORDS:
+            return "confirmation"
         subject_terms = self._extract_subject_terms(message)
         if subject_terms:
             return "new_topic"
-        if self.is_confirmation(message) and normalized in self.CONFIRMATION_WORDS:
-            return "confirmation"
         if len(normalized.split()) <= 3:
             return "follow_up"
         return "general"
@@ -148,7 +144,7 @@ class ContextService:
         explicit_subject = self.extract_subject(message)
         if explicit_subject:
             subject = explicit_subject
-        elif message_type in {"follow_up", "confirmation", "company_general"}:
+        elif message_type in {"follow_up", "confirmation"}:
             subject = previous_subject
         else:
             subject = None
@@ -230,8 +226,23 @@ class ContextService:
         return True
 
     def extract_subject(self, message: str) -> str | None:
+        normalized = self._normalize_text(message)
+        if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
+            return None
         terms = self._extract_subject_terms(message)
-        return " ".join(terms[: self.MAX_SUBJECT_TERMS]) if terms else None
+        # Strip common intent words from compound subject extraction so that
+        # "What are the timings for Python?" resolves to "python".
+        intent_tokens = set().union(
+            *(set(re.findall(r"[a-z0-9+#.-]+", self._normalize_text(phrase))) for phrase in (
+                self.FEE_PHRASES, self.DISCOUNT_PHRASES, self.TOPIC_PHRASES,
+                self.DURATION_PHRASES, self.TIMING_PHRASES, self.MODE_PHRASES,
+                self.ADMISSION_PHRASES, self.CONTACT_PHRASES, self.AVAILABILITY_PHRASES,
+            ))
+        )
+        filtered = [term for term in terms if term not in intent_tokens and term not in {"course", "courses", "training", "program", "programs", "service", "services"}]
+        if not filtered and terms and len(terms) == 1 and terms[0] not in intent_tokens:
+            filtered = terms
+        return " ".join(filtered[: self.MAX_SUBJECT_TERMS]) if filtered else None
 
     def _is_company_wide_question(self, message: str) -> bool:
         normalized = self._normalize_text(message)
@@ -250,12 +261,11 @@ class ContextService:
             r"^what does your company offer$",
             r"^what are you offering$",
         )
-        if any(re.search(pattern, normalized) for pattern in patterns):
-            return True
-        has_course_word = any(word in normalized for word in ("course", "courses", "training", "program", "programs"))
-        has_offer_word = any(word in normalized for word in ("offer", "offers", "offering", "provide", "provides", "available"))
-        has_company_reference = any(word in normalized for word in ("your company", "the company", "your business"))
-        return has_course_word and has_offer_word and has_company_reference
+        return any(re.search(pattern, normalized) for pattern in patterns) or (
+            any(word in normalized for word in ("course", "courses", "training", "program", "programs"))
+            and any(word in normalized for word in ("offer", "offers", "offering", "provide", "provides", "available"))
+            and any(word in normalized for word in ("your company", "the company", "your business"))
+        )
 
     def _looks_like_follow_up(self, message: str) -> bool:
         normalized = self._normalize_text(message)
@@ -263,9 +273,13 @@ class ContextService:
             return False
         if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
             return True
-        if self._contains_fuzzy_intent_word(normalized) and not self._extract_subject_terms(message):
-            return True
+        if self._is_company_wide_question(message) or self._is_general_question(message):
+            return False
         words = set(re.findall(r"[A-Za-z0-9+#.-]+", normalized))
+        # A terse question like "How much?" should always be interpreted as
+        # context-dependent, even though "much" has no explicit subject.
+        if len(words) <= 3 and any(word in words for word in self.FOLLOW_UP_WORDS):
+            return True
         return bool(words & self.FOLLOW_UP_WORDS) and not self._extract_subject_terms(message)
 
     def _contains_fuzzy_intent_word(self, normalized: str) -> bool:
@@ -283,12 +297,10 @@ class ContextService:
             if index > 0 and normalized[index - 1]["role"] == "assistant" and self._is_lead_detail_question(normalized[index - 1]["content"]):
                 continue
             message_type = self.classify_message(content)
-            if message_type == "new_topic" or message_type == "company_general":
+            if message_type == "new_topic":
                 subject = self.extract_subject(content)
                 if subject:
                     return subject
-            # Context-bearing follow-up phrases should inherit from the latest
-            # explicit topic rather than becoming their own subject.
         return None
 
     @staticmethod
@@ -308,17 +320,12 @@ class ContextService:
         normalized = self._normalize_text(message)
         if subject and subject in normalized:
             return message[: self.MAX_RETRIEVAL_QUERY_LENGTH]
-        if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
-            return f"{subject} {message}"[: self.MAX_RETRIEVAL_QUERY_LENGTH]
         return f"{subject} {message}"[: self.MAX_RETRIEVAL_QUERY_LENGTH]
 
     def _extract_subject_terms(self, message: str) -> list[str]:
         normalized = self._normalize_text(message)
-        if not normalized:
+        if not normalized or self._is_general_question(message) or self._is_company_wide_question(message):
             return []
-        if self._is_general_question(message) or self._is_company_wide_question(message):
-            return []
-        # A known follow-up phrase is context-only and must not become a subject.
         if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
             return []
         tokens = re.findall(r"[A-Za-z0-9+#.-]+", normalized)
@@ -358,7 +365,7 @@ class ContextService:
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        return " ".join(str(text or "").lower().replace("’", "'").split())
+        return " ".join(str(text or "").lower().replace("’", "'").split()).rstrip("?!.,;:").strip()
 
     @staticmethod
     def _normalize_messages(messages) -> list[dict[str, str]]:

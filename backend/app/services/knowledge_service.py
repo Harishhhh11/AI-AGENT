@@ -166,6 +166,17 @@ class KnowledgeService:
             if getattr(item, "id", None) is not None:
                 by_id[item.id] = item
         candidates = list(by_id.values())
+
+        # Broad catalog/topic questions often contain only intent words such as
+        # "which courses do you offer" or "what topics are covered". Those words
+        # are deliberately excluded from lexical search, and semantic retrieval
+        # can be unavailable locally. In that case, fall back to the complete
+        # active knowledge scope for this receptionist. The tenant + agent filter
+        # is still enforced, so another receptionist's private knowledge can
+        # never leak into the answer.
+        if not candidates and self._is_broad_query(query, keywords):
+            candidates = self._scoped_active_knowledge(organization_id, agent_id, self.CANDIDATE_LIMIT)
+
         if not candidates:
             return []
 
@@ -192,6 +203,26 @@ class KnowledgeService:
 
         candidates.sort(key=score, reverse=True)
         return candidates[:limit]
+
+    def _scoped_active_knowledge(self, organization_id: int, agent_id: int | None, limit: int) -> list[KnowledgeBase]:
+        statement = select(KnowledgeBase).where(
+            KnowledgeBase.organization_id == organization_id,
+            KnowledgeBase.is_active.is_(True),
+        )
+        if agent_id is not None:
+            statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
+        return list(self.db.scalars(statement.order_by(KnowledgeBase.id.desc()).limit(limit)).all())
+
+    @classmethod
+    def _is_broad_query(cls, query: str, keywords: list[str]) -> bool:
+        normalized = cls._normalize_text(query)
+        broad_phrases = (
+            r"^(?:which|what)\s+(?:courses?|programs?|training|services?|products?)\s+(?:do\s+you\s+offer|are\s+(?:you|your\s+company)\s+offering|are\s+(?:available))$",
+            r"^what\s+do\s+you\s+offer$",
+            r"^what\s+(?:topics?|content|syllabus|curriculum)\s+(?:are\s+)?covered$",
+            r"^(?:what|which)\s+(?:courses?|programs?|training)\s+(?:are\s+)?available$",
+        )
+        return not keywords and any(re.search(pattern, normalized) for pattern in broad_phrases)
 
     def _keyword_search(self, organization_id: int, agent_id: int | None, keywords: list[str], limit: int) -> list[KnowledgeBase]:
         if not keywords:
@@ -255,6 +286,14 @@ class KnowledgeService:
                 continue
             result.append(word)
         return result[: cls.MAX_KEYWORDS]
+
+    @staticmethod
+    def _term_in_text(term: str, text: str) -> bool:
+        return bool(re.search(rf"(?<![a-zA-Z0-9+#]){re.escape(term.lower())}(?![a-zA-Z0-9+#])", text.lower()))
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join(str(text or "").lower().split())
 
     @staticmethod
     def _term_in_text(term: str, text: str) -> bool:

@@ -149,6 +149,11 @@ class ContextService:
         else:
             subject = None
         intent = self.detect_intent(message)
+        # Context-only follow-ups are not standalone confirmations. The current
+        # message must inherit the neutral/general intent so response policy and
+        # retrieval can use the previous subject without triggering lead flow.
+        if message_type == "follow_up" and not explicit_subject and intent == self.INTENT_CONFIRMATION:
+            intent = self.INTENT_GENERAL
         response_style = self.detect_response_style(message, intent=intent, question_count=self.count_questions(message))
         requires_knowledge = self.requires_knowledge(message_type=message_type, intent=intent)
         retrieval_query = self.build_retrieval_query(current_message=message, messages=previous_messages)
@@ -230,8 +235,6 @@ class ContextService:
         if normalized in {"tell me", "tell me more", "go ahead", "more", "please tell me"}:
             return None
         terms = self._extract_subject_terms(message)
-        # Strip common intent words from compound subject extraction so that
-        # "What are the timings for Python?" resolves to "python".
         intent_tokens = set().union(
             *(set(re.findall(r"[a-z0-9+#.-]+", self._normalize_text(phrase))) for phrase in (
                 self.FEE_PHRASES, self.DISCOUNT_PHRASES, self.TOPIC_PHRASES,
@@ -276,8 +279,6 @@ class ContextService:
         if self._is_company_wide_question(message) or self._is_general_question(message):
             return False
         words = set(re.findall(r"[A-Za-z0-9+#.-]+", normalized))
-        # A terse question like "How much?" should always be interpreted as
-        # context-dependent, even though "much" has no explicit subject.
         if len(words) <= 3 and any(word in words for word in self.FOLLOW_UP_WORDS):
             return True
         return bool(words & self.FOLLOW_UP_WORDS) and not self._extract_subject_terms(message)

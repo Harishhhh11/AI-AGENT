@@ -66,7 +66,6 @@ class KnowledgeAnswerService:
 
     def _fact_answer(self, items: list[object], field: str) -> str | None:
         answers: list[str] = []
-        seen_titles: set[str] = set()
         seen_facts: set[str] = set()
         labels = self.FACT_LABELS[field]
         for item in items:
@@ -76,22 +75,24 @@ class KnowledgeAnswerService:
                 continue
             extracted = self._extract_field(content, field)
             if extracted:
-                fact_key = self._normalize_fact(extracted)
-                if fact_key in seen_facts:
+                exact_fact_key = self._normalize_fact(extracted)
+                if exact_fact_key in seen_facts:
                     continue
-                seen_facts.add(fact_key)
-                if self._contains_supporting_sentence(content, extracted):
-                    extracted = self._append_supporting_sentences(content, extracted, field)
-                answer = f"{title}: {extracted}" if title else extracted
-                title_key = title.lower()
-                if title_key and title_key in seen_titles and answer in answers:
+                supporting = self._supporting_sentence_for_field(content, field, extracted)
+                if supporting:
+                    answer_text = f"{title}: {supporting}" if title else supporting
+                else:
+                    answer_text = f"{title}: {extracted}" if title else extracted
+                normalized_answer = self._normalize_fact(answer_text)
+                if normalized_answer in seen_facts:
                     continue
-                if title_key:
-                    seen_titles.add(title_key)
-                answers.append(answer)
+                seen_facts.add(exact_fact_key)
+                seen_facts.add(normalized_answer)
+                answers.append(answer_text)
             else:
-                pieces = [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
-                for piece in self._attach_supporting_details(self._pieces(content), pieces)[:6]:
+                pieces = self._pieces(content)
+                matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
+                for piece in self._attach_supporting_details(pieces, matching)[:6]:
                     normalized = self._normalize_fact(piece)
                     if normalized and normalized not in seen_facts:
                         seen_facts.add(normalized)
@@ -117,37 +118,35 @@ class KnowledgeAnswerService:
         return None
 
     @classmethod
-    def _contains_supporting_sentence(cls, content: str, extracted: str) -> bool:
+    def _supporting_sentence_for_field(cls, content: str, field: str, extracted: str) -> str | None:
         pieces = cls._pieces(content)
-        normalized = cls._normalize_fact(extracted)
-        if not normalized:
-            return False
-        for piece in pieces:
-            if normalized in cls._normalize_fact(piece):
-                return len(pieces) > 1
-        return False
+        if len(pieces) < 2:
+            return None
+        for index, piece in enumerate(pieces):
+            if cls._field_matches_piece(piece, field, extracted):
+                result = [piece]
+                if index + 1 < len(pieces):
+                    candidate = pieces[index + 1]
+                    candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
+                    if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
+                        result.append(candidate)
+                return " ".join(result)
+        return None
 
     @classmethod
-    def _append_supporting_sentences(cls, content: str, extracted: str, field: str) -> str:
-        pieces = cls._pieces(content)
-        if not pieces:
-            return extracted
-        index = next((i for i, p in enumerate(pieces) if cls._normalize_fact(extracted) in cls._normalize_fact(p)), None)
-        if index is None:
-            return extracted
-        result = [pieces[index]]
-        for neighbor in (index + 1,):
-            if neighbor < len(pieces):
-                candidate = pieces[neighbor]
-                terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
-                if terms & cls.SUPPORTING_DETAIL_TERMS:
-                    result.append(candidate)
-        return " ".join(result)
+    def _field_matches_piece(cls, piece: str, field: str, extracted: str) -> bool:
+        normalized_piece = cls._normalize_fact(piece)
+        normalized_extracted = cls._normalize_fact(extracted)
+        if normalized_extracted and normalized_extracted in normalized_piece:
+            return True
+        patterns = cls.FIELD_PATTERNS.get(field, ())
+        return any(re.search(pattern, piece, flags=re.IGNORECASE) for pattern in patterns)
 
     @classmethod
     def _normalize_fact(cls, value: str) -> str:
         text = cls._clean(value).lower()
         text = re.sub(r"^the\s+", "", text)
+        text = re.sub(r"\s+", " ", text)
         return text.rstrip(".")
 
     @classmethod

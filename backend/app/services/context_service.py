@@ -149,9 +149,6 @@ class ContextService:
         else:
             subject = None
         intent = self.detect_intent(message)
-        # Context-only follow-ups are not standalone confirmations. The current
-        # message must inherit the neutral/general intent so response policy and
-        # retrieval can use the previous subject without triggering lead flow.
         if message_type == "follow_up" and not explicit_subject and intent == self.INTENT_CONFIRMATION:
             intent = self.INTENT_GENERAL
         response_style = self.detect_response_style(message, intent=intent, question_count=self.count_questions(message))
@@ -384,6 +381,16 @@ class ContextService:
             return 0.0
         import difflib
         return difflib.SequenceMatcher(None, first.lower(), second.lower()).ratio()
+
+    def build_context(self, messages) -> str:
+        """Build a bounded transcript for the receptionist prompt."""
+        normalized = self._normalize_messages(messages)
+        if not normalized:
+            return "No previous conversation."
+        return "\n".join(
+            f"{item['role'].upper()}: {item['content']}"
+            for item in normalized[-self.MAX_CONTEXT_MESSAGES:]
+        )
 
     def count_questions(self, message: str) -> int:
         return max(1, (message or "").count("?")) if (message or "").strip() else 0

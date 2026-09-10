@@ -75,18 +75,11 @@ class KnowledgeAnswerService:
                 continue
             extracted = self._extract_field(content, field)
             if extracted:
-                exact_fact_key = self._normalize_fact(extracted)
-                if exact_fact_key in seen_facts:
-                    continue
                 supporting = self._supporting_sentence_for_field(content, field, extracted)
-                if supporting:
-                    answer_text = f"{title}: {supporting}" if title else supporting
-                else:
-                    answer_text = f"{title}: {extracted}" if title else extracted
+                answer_text = f"{title}: {supporting or extracted}" if title else (supporting or extracted)
                 normalized_answer = self._normalize_fact(answer_text)
                 if normalized_answer in seen_facts:
                     continue
-                seen_facts.add(exact_fact_key)
                 seen_facts.add(normalized_answer)
                 answers.append(answer_text)
             else:
@@ -114,7 +107,9 @@ class KnowledgeAnswerService:
             verb = match.groupdict().get("verb")
             if verb:
                 return f"{label} {verb} {value}.".replace("  ", " ")
-            return f"{label}: {value}"
+            if field in {"timings", "duration", "mode"}:
+                return value.rstrip(".")
+            return f"{label} {value}".strip()
         return None
 
     @classmethod
@@ -139,8 +134,7 @@ class KnowledgeAnswerService:
         normalized_extracted = cls._normalize_fact(extracted)
         if normalized_extracted and normalized_extracted in normalized_piece:
             return True
-        patterns = cls.FIELD_PATTERNS.get(field, ())
-        return any(re.search(pattern, piece, flags=re.IGNORECASE) for pattern in patterns)
+        return any(re.search(pattern, piece, flags=re.IGNORECASE) for pattern in cls.FIELD_PATTERNS.get(field, ()))
 
     @classmethod
     def _normalize_fact(cls, value: str) -> str:

@@ -11,7 +11,6 @@ def test_chat_service_initializes_phase2_services() -> None:
         patch("app.services.chat_service.ConversationService"), \
         patch("app.services.chat_service.KnowledgeService"), \
         patch("app.services.chat_service.ContextService"), \
-        patch("app.services.chat_service.LeadExtractor"), \
         patch("app.services.chat_service.LeadService"), \
         patch("app.services.chat_service.LeadContextService"), \
         patch("app.services.chat_service.ToolOrchestrator"):

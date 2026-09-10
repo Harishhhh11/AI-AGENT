@@ -6,7 +6,7 @@ import re
 
 
 class KnowledgeAnswerService:
-    """Build customer-facing answers only from retrieved, tenant-scoped knowledge."""
+    """Build concise customer-facing answers from retrieved, tenant-scoped facts."""
 
     FACT_LABELS = {
         "fee": {"fee", "fees", "price", "pricing", "cost", "costs", "tuition"},
@@ -24,49 +24,106 @@ class KnowledgeAnswerService:
         "registration", "admission", "admissions", "batch", "batches", "weekday", "weekend",
     }
 
+    FIELD_PATTERNS = {
+        "fee": (
+            r"(?:course\s*)?fee(?:s)?\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?:course\s*)?fee(?:s)?\s+(?:is|are)\s+(?P<value>[^.\n]+)",
+            r"(?:price|pricing|cost|tuition)\s*[:\-]\s*(?P<value>[^.\n]+)",
+        ),
+        "duration": (
+            r"duration\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"duration\s+(?:is|of)\s+(?P<value>[^.\n]+)",
+        ),
+        "timings": (
+            r"(?:class\s+)?schedule\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?:class\s+)?timings?\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?:class\s+)?timings?\s+(?:are|is)\s+(?P<value>[^.\n]+)",
+        ),
+        "mode": (
+            r"training\s+mode\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"mode\s*[:\-]\s*(?P<value>[^.\n]+)",
+        ),
+        "contact": (
+            r"contact\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?:phone|mobile|email|address|location)\s*[:\-]\s*(?P<value>[^.\n]+)",
+        ),
+    }
+
     def answer(self, *, items: list[object], intent: str, subject: str | None, response_style: str) -> str | None:
         if not items:
             return None
         if intent == "duration_and_timings":
             return self._join_answers(
-                self._fact_answer(items, self.FACT_LABELS["duration"]),
-                self._fact_answer(items, self.FACT_LABELS["timings"]),
+                self._fact_answer(items, "duration"),
+                self._fact_answer(items, "timings"),
             )
         if intent in self.FACT_LABELS:
-            return self._fact_answer(items, self.FACT_LABELS[intent])
-        if intent in {"details", "company_courses", "topics", "availability", "company_information"} or response_style == "long":
-            return self._summary(items, response_style, company_wide=intent in {"company_courses", "availability", "company_information"})
+            return self._fact_answer(items, intent)
+        if intent == "company_courses":
+            return self._course_catalog(items)
+        if intent in {"details", "topics", "availability", "company_information"} or response_style == "long":
+            return self._summary(items, response_style, company_wide=intent in {"availability", "company_information"})
         return None
 
-    def _fact_answer(self, items: list[object], labels: set[str]) -> str | None:
+    def _fact_answer(self, items: list[object], field: str) -> str | None:
         answers: list[str] = []
         seen: set[str] = set()
+        labels = self.FACT_LABELS[field]
         for item in items:
             title = self._clean(getattr(item, "title", ""))
             content = self._clean_preserve_lines(getattr(item, "content", ""))
             if not content:
                 continue
-            pieces = self._pieces(content)
-            matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
-            if not matching and self._contains_fact(content, labels):
-                matching = [content]
-            if matching:
-                matching = self._attach_supporting_details(pieces, matching)
+            extracted = self._extract_field(content, field)
+            if extracted:
+                pieces = [extracted]
+            else:
+                pieces = [piece for piece in self._pieces(content) if self._contains_fact(piece, labels)]
+                if pieces:
+                    pieces = self._attach_supporting_details(self._pieces(content), pieces)
             unique: list[str] = []
-            for piece in matching[:6]:
+            for piece in pieces[:6]:
                 normalized = self._clean(piece).lower()
                 if normalized and normalized not in seen:
                     seen.add(normalized)
                     unique.append(self._clean(piece))
             if unique:
-                answers.append(f"{title}: {' '.join(unique)}" if title else " ".join(unique))
+                value = " ".join(unique)
+                answers.append(f"{title}: {value}" if title else value)
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
 
     @classmethod
+    def _extract_field(cls, content: str, field: str) -> str | None:
+        for pattern in cls.FIELD_PATTERNS.get(field, ()):
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                value = re.sub(r"\s+", " ", match.group("value")).strip(" \t:-")
+                if value:
+                    return value
+        return None
+
+    @classmethod
+    def _course_catalog(cls, items: list[object]) -> str | None:
+        names: list[str] = []
+        seen: set[str] = set()
+        course_pattern = re.compile(r"(?:course|program|training)\s*[:\-]\s*([^\n.]+)", re.IGNORECASE)
+        for item in items:
+            content = cls._clean_preserve_lines(getattr(item, "content", ""))
+            title = cls._clean(getattr(item, "title", ""))
+            candidates = [m.group(1).strip() for m in course_pattern.finditer(content)]
+            if not candidates and title:
+                candidates = [title]
+            for candidate in candidates:
+                normalized = candidate.lower()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    names.append(candidate)
+        return "We currently offer: " + ", ".join(names) + "." if names else None
+
+    @classmethod
     def _attach_supporting_details(cls, pieces: list[str], matching: list[str]) -> list[str]:
-        """Keep adjacent facts that clarify a verified answer instead of truncating them."""
         if len(matching) >= 2 or len(pieces) <= 1:
             return matching
         selected_indexes = [index for index, piece in enumerate(pieces) if piece in matching]
@@ -111,10 +168,7 @@ class KnowledgeAnswerService:
     @staticmethod
     def _contains_fact(text: str, labels: set[str]) -> bool:
         normalized = (text or "").lower()
-        return any(
-            re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized)
-            for label in labels
-        )
+        return any(re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized) for label in labels)
 
     @staticmethod
     def _join_answers(first: str | None, second: str | None) -> str | None:

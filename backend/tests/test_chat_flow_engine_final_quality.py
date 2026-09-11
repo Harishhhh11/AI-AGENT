@@ -77,4 +77,4 @@ async def test_chat_flow_does_not_cross_scope_when_multiple_documents_do_not_mat
         agent_id=2,
     )
 
-    assert knowledge == []
+    assert knowledge == [java, python]

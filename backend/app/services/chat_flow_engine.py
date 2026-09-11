@@ -10,6 +10,11 @@ class ChatFlowEngine:
     MAX_QUESTIONS = 8
     RETRIEVAL_LIMIT = 4
     MAX_GROUNDED_ITEMS = 12
+    KNOWLEDGE_INTENTS = {
+        "company_courses", "topics", "fee", "discount", "duration", "timings",
+        "duration_and_timings", "mode", "admission", "contact", "company_information",
+        "details", "availability", "certificate", "payment", "eligibility",
+    }
 
     def __init__(self, llm, retrieval_service, grounding_service, answer_orchestrator, knowledge_service):
         self.semantic = SemanticConversationService(llm)
@@ -76,6 +81,7 @@ class ChatFlowEngine:
                 subject=query_plan.get("subject"),
                 agent_id=agent_id,
             )
+            accepted_for_query = []
             for result in results:
                 decision = self.grounding.evaluate(
                     query=query_plan["query"],
@@ -84,7 +90,22 @@ class ChatFlowEngine:
                     semantic_distance=getattr(result, "semantic_distance", None),
                 )
                 if decision.accepted:
-                    knowledge.append(result)
+                    accepted_for_query.append(result)
+
+            # Retrieval relevance is a ranking signal, not permission to discard
+            # the only knowledge document assigned to a receptionist. Natural
+            # questions such as "what are the fees?" or "can I join online?"
+            # often contain intent words that do not literally occur in the
+            # source document. Ollama must see the scoped source and decide from
+            # its actual content rather than receiving an artificial "no data".
+            if not accepted_for_query and query_plan.get("intent") in self.KNOWLEDGE_INTENTS:
+                accepted_for_query = self._scoped_fallback(
+                    available_items,
+                    subject=query_plan.get("subject"),
+                    limit=self.RETRIEVAL_LIMIT,
+                )
+
+            knowledge.extend(accepted_for_query)
 
         deduped = []
         seen = set()
@@ -99,6 +120,16 @@ class ChatFlowEngine:
             if len(deduped) >= self.MAX_GROUNDED_ITEMS:
                 break
         return semantic, queries, deduped
+
+    @staticmethod
+    def _scoped_fallback(items, subject: str | None, limit: int):
+        candidates = list(items or [])
+        if subject:
+            from app.services.conversation_guard import ConversationGuard
+            matched = [item for item in candidates if ConversationGuard.matches_subject(subject, item)]
+            if matched:
+                candidates = matched
+        return candidates[:limit]
 
     def _available_items(self, organization_id, agent_id):
         if agent_id is None:

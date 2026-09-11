@@ -38,10 +38,29 @@ class RetrievalService:
             )
         except Exception as exc:
             print("Knowledge retrieval error:", exc)
-            return []
+            results = []
 
         if normalized_subject:
             results = self._filter_by_subject(results, normalized_subject)
+
+        # Search can miss a valid user-uploaded record when the query is mostly
+        # intent vocabulary (for example "what topics are covered") or when the
+        # local embedding backend is unavailable. Fall back to the exact scoped
+        # knowledge set before declaring that the receptionist has no answer.
+        if not results:
+            try:
+                scoped = self.knowledge_service.get_all(
+                    organization_id=organization_id,
+                    agent_id=agent_id,
+                    scope="available",
+                )
+            except Exception as exc:
+                print("Scoped knowledge retrieval error:", exc)
+                scoped = []
+            if normalized_subject:
+                scoped = self._filter_by_subject(scoped, normalized_subject)
+            results = list(scoped or [])
+
         return self.ranker.rank(query=retrieval_query, items=list(results or []), limit=limit)
 
     @staticmethod

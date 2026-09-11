@@ -45,15 +45,7 @@ class KnowledgeService:
     def _build_embedding_text(title: str, content: str, category: str) -> str:
         return f"TITLE:\n{title}\n\nCATEGORY:\n{category}\n\nCONTENT:\n{content}".strip()
 
-    def create(
-        self,
-        organization_id: int,
-        title: str,
-        content: str,
-        source: str,
-        category: str,
-        agent_id: int | None = None,
-    ) -> KnowledgeBase:
+    def create(self, organization_id: int, title: str, content: str, source: str, category: str, agent_id: int | None = None) -> KnowledgeBase:
         title = (title or "").strip()
         content = (content or "").strip()
         category = (category or "general").strip()
@@ -92,17 +84,7 @@ class KnowledgeService:
     def get_by_id(self, knowledge_id: int, organization_id: int) -> KnowledgeBase | None:
         return self.repository.get_by_id_in_organization(knowledge_id, organization_id)
 
-    def update(
-        self,
-        knowledge_id: int,
-        organization_id: int,
-        title: str | None = None,
-        content: str | None = None,
-        source: str | None = None,
-        category: str | None = None,
-        agent_id: Any = _UNSET,
-        is_active: bool | None = None,
-    ) -> KnowledgeBase | None:
+    def update(self, knowledge_id: int, organization_id: int, title: str | None = None, content: str | None = None, source: str | None = None, category: str | None = None, agent_id: Any = _UNSET, is_active: bool | None = None) -> KnowledgeBase | None:
         knowledge = self.get_by_id(knowledge_id, organization_id)
         if knowledge is None:
             return None
@@ -113,7 +95,6 @@ class KnowledgeService:
             raise ValueError("Knowledge title cannot be empty.")
         if not final_content:
             raise ValueError("Knowledge content cannot be empty.")
-
         knowledge.title = final_title
         knowledge.content = final_content
         knowledge.category = final_category
@@ -124,10 +105,7 @@ class KnowledgeService:
         if is_active is not None:
             knowledge.is_active = is_active
         if title is not None or content is not None or category is not None:
-            knowledge.embedding = self.embedding_service.generate(
-                self._build_embedding_text(final_title, final_content, final_category)
-            )
-
+            knowledge.embedding = self.embedding_service.generate(self._build_embedding_text(final_title, final_content, final_category))
         self.db.commit()
         self.db.refresh(knowledge)
         return knowledge
@@ -166,6 +144,10 @@ class KnowledgeService:
             if getattr(item, "id", None) is not None:
                 by_id[item.id] = item
         candidates = list(by_id.values())
+
+        if not candidates and self._is_broad_query(query, keywords):
+            candidates = self._scoped_active_knowledge(organization_id, agent_id, self.CANDIDATE_LIMIT)
+
         if not candidates:
             return []
 
@@ -193,6 +175,31 @@ class KnowledgeService:
         candidates.sort(key=score, reverse=True)
         return candidates[:limit]
 
+    def _scoped_active_knowledge(self, organization_id: int, agent_id: int | None, limit: int) -> list[KnowledgeBase]:
+        statement = select(KnowledgeBase).where(
+            KnowledgeBase.organization_id == organization_id,
+            KnowledgeBase.is_active.is_(True),
+        )
+        if agent_id is not None:
+            statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
+        statement = statement.order_by(KnowledgeBase.id.desc()).limit(limit)
+        try:
+            return list(self.db.scalars(statement).all())
+        except Exception as exc:
+            print("Scoped knowledge fallback error:", exc)
+            return []
+
+    @classmethod
+    def _is_broad_query(cls, query: str, keywords: list[str]) -> bool:
+        normalized = cls._normalize_text(query).rstrip("?.!")
+        broad_phrases = (
+            r"^(?:which|what)\s+(?:courses?|programs?|training|services?|products?)\s+(?:do\s+you\s+offer|are\s+(?:you|your\s+company)\s+offering|are\s+(?:available))$",
+            r"^what\s+do\s+you\s+offer$",
+            r"^what\s+(?:topics?|content|syllabus|curriculum)\s+(?:are\s+)?covered$",
+            r"^(?:what|which)\s+(?:courses?|programs?|training)\s+(?:are\s+)?available$",
+        )
+        return not keywords and any(re.search(pattern, normalized) for pattern in broad_phrases)
+
     def _keyword_search(self, organization_id: int, agent_id: int | None, keywords: list[str], limit: int) -> list[KnowledgeBase]:
         if not keywords:
             return []
@@ -200,11 +207,7 @@ class KnowledgeService:
         for keyword in keywords:
             pattern = f"%{keyword}%"
             conditions.extend((func.lower(KnowledgeBase.title).like(pattern), func.lower(KnowledgeBase.content).like(pattern), func.lower(KnowledgeBase.category).like(pattern)))
-        statement = select(KnowledgeBase).where(
-            KnowledgeBase.organization_id == organization_id,
-            KnowledgeBase.is_active.is_(True),
-            or_(*conditions),
-        )
+        statement = select(KnowledgeBase).where(KnowledgeBase.organization_id == organization_id, KnowledgeBase.is_active.is_(True), or_(*conditions))
         if agent_id is not None:
             statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
         statement = statement.order_by(KnowledgeBase.id.desc()).limit(limit)
@@ -221,11 +224,7 @@ class KnowledgeService:
             print("Embedding generation error:", exc)
             return []
         distance = KnowledgeBase.embedding.cosine_distance(query_embedding)
-        statement = select(KnowledgeBase, distance.label("similarity_distance")).where(
-            KnowledgeBase.organization_id == organization_id,
-            KnowledgeBase.is_active.is_(True),
-            KnowledgeBase.embedding.is_not(None),
-        )
+        statement = select(KnowledgeBase, distance.label("similarity_distance")).where(KnowledgeBase.organization_id == organization_id, KnowledgeBase.is_active.is_(True), KnowledgeBase.embedding.is_not(None))
         if agent_id is not None:
             statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
         statement = statement.order_by(distance.asc()).limit(limit)

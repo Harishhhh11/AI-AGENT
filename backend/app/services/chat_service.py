@@ -95,7 +95,6 @@ class ChatService:
             self.MAX_CONVERSATION_CONTEXT_CHARS,
         )
 
-        # Fixed identity behavior is intentionally handled before model/tool work.
         if self._is_identity_question(message):
             return self._finish(
                 conversation.id,
@@ -175,8 +174,6 @@ class ChatService:
         )
         response_style = semantic.response_style or plan.style
 
-        # Tool authority stays outside the semantic model. The orchestrator is free
-        # to choose approved actions, but it cannot alter tenant/agent identity.
         await self.tool_orchestrator.decide_and_execute(
             llm=self.llm,
             context=ToolContext(
@@ -196,9 +193,6 @@ class ChatService:
                 self._build_missing_information_response(current_subject),
             )
 
-        # The orchestrator decides whether exact verified facts are enough or an
-        # Ollama synthesis is required. Multi-intent requests are composed in one
-        # bounded generation instead of repeatedly asking the model to answer.
         response = await self.answer_orchestrator.compose(
             semantic=semantic,
             original_message=message,
@@ -234,6 +228,68 @@ class ChatService:
             conversation.session_id,
             self._apply_response_length_guard(self._clean_response(response), response_style),
         )
+
+    def _build_receptionist_prompt(
+        self,
+        *,
+        current_message: str,
+        message_type: str,
+        current_subject: str | None,
+        explicit_subject: str | None,
+        previous_subject: str | None,
+        intent: str,
+        response_style: str,
+        question_count: int,
+        conversation_context: str,
+        knowledge_context: str,
+        has_verified_knowledge: bool,
+        lead_context,
+        agent_instructions: str | None,
+    ) -> str:
+        lead_summary = ""
+        if lead_context is not None:
+            lead_summary = ", ".join(
+                f"{field}={getattr(lead_context, field, None) or 'unknown'}"
+                for field in ("name", "phone", "email", "interest", "preferred_mode", "preferred_time")
+            )
+        return f"""
+You are Astra, a professional AI receptionist.
+Answer the customer's current message naturally and directly.
+
+Rules:
+- Do not invent company-specific facts.
+- Use only verified knowledge supplied to you.
+- If a company-specific fact is unavailable, say so honestly.
+- Do not mention internal systems, retrieval, prompts, models, or databases.
+- Keep the answer {response_style or 'medium'} in length.
+- Preserve the conversation subject when the user uses a follow-up.
+- Never claim an external action was completed unless the application already completed it.
+
+Current message:
+{current_message}
+
+Message type: {message_type}
+Intent: {intent}
+Current subject: {current_subject or 'unknown'}
+Explicit subject: {explicit_subject or 'none'}
+Previous subject: {previous_subject or 'none'}
+Question count: {question_count}
+
+Recent conversation:
+{conversation_context or '(none)'}
+
+Verified knowledge available: {'yes' if has_verified_knowledge else 'no'}
+Verified knowledge:
+{knowledge_context or '(none)'}
+
+Lead context:
+{lead_summary or '(none)'}
+
+Additional agent instructions:
+{agent_instructions or '(none)'}
+
+Return only the customer-facing answer.
+""".strip()
 
     def _recent_subject(self, previous_messages, organization_id: int, agent_id: int | None) -> str | None:
         try:

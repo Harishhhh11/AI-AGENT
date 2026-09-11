@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.services.answer_orchestrator import AnswerOrchestrator
 from app.services.conversation_query_service import ConversationQueryService
 from app.services.semantic_conversation_service import SemanticConversationService
 
@@ -25,7 +24,7 @@ class ChatFlowEngine:
         available_subjects = list(dict.fromkeys(
             str(getattr(item, "title", "") or "").strip()
             for item in available_items
-            if getattr(item, "is_active", True) and str(getattr(item, "title", "") or "").strip()
+            if str(getattr(item, "title", "") or "").strip()
         ))
 
         semantic = await self.semantic.analyze(
@@ -40,8 +39,8 @@ class ChatFlowEngine:
                 available_subjects=available_subjects,
             )
 
-        # A receptionist with no assigned/shared knowledge must never answer
-        # company-specific factual questions from unrelated/default data.
+        # A receptionist with no active assigned/shared knowledge must never
+        # answer company-specific factual questions from another scope.
         if semantic.requires_knowledge and not available_items:
             return semantic, [], []
 
@@ -105,10 +104,11 @@ class ChatFlowEngine:
         if agent_id is None:
             return []
         try:
-            return self.knowledge_service.get_all(
+            items = self.knowledge_service.get_all(
                 organization_id=organization_id,
                 agent_id=agent_id,
                 scope="available",
             )
+            return [item for item in items if getattr(item, "is_active", True)]
         except Exception:
             return []

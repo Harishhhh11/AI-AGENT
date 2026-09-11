@@ -39,6 +39,34 @@ async def test_semantic_analysis_normalizes_intent_and_subject():
     assert result.subject == "Java Programming"
 
 
+@pytest.mark.asyncio
+async def test_llm_topic_misclassification_is_corrected_and_single_subject_is_inferred():
+    service = SemanticConversationService(
+        FakeLLM(
+            {
+                "intent": "company_courses",
+                "subject": None,
+                "questions": [
+                    {"text": "What topics are covered?", "intent": "company_courses", "subject": None}
+                ],
+                "response_style": "short",
+                "requires_knowledge": True,
+                "wants_lead_action": False,
+            }
+        )
+    )
+    result = await service.analyze(
+        message="What topics are covered?",
+        conversation_context="",
+        available_subjects=["Python Programming"],
+    )
+    assert result is not None
+    assert result.intent == "topics"
+    assert result.subject == "Python Programming"
+    assert result.questions[0]["intent"] == "topics"
+    assert result.questions[0]["subject"] == "Python Programming"
+
+
 def test_fallback_detects_python_duration_after_paraphrase():
     service = SemanticConversationService(None)
     result = service.fallback("What is the duration for Python?", "")
@@ -65,3 +93,11 @@ def test_fallback_preserves_only_known_subjects_when_available():
     service = SemanticConversationService(None)
     result = service.fallback("Whats the fee?", available_subjects=["Java Programming", "Python Programming"])
     assert result.questions[0]["subject"] is None
+
+
+def test_fallback_infers_only_available_subject():
+    service = SemanticConversationService(None)
+    result = service.fallback("What topics are covered?", available_subjects=["Python Programming"])
+    assert result.intent == "topics"
+    assert result.subject == "Python Programming"
+    assert result.questions[0]["subject"] == "Python Programming"

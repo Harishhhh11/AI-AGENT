@@ -11,7 +11,7 @@ class ConversationGuard:
     GENERIC_TERMS = {
         "course", "courses", "class", "classes", "training", "program", "programs",
         "service", "services", "product", "products", "details", "information", "info",
-        "technology", "technologies", "language", "the", "a", "an",
+        "technology", "technologies", "language", "programming", "the", "a", "an",
     }
 
     @classmethod
@@ -40,6 +40,4 @@ class ConversationGuard:
             for term in terms
             if re.search(rf"(?<![a-z0-9+#]){re.escape(term)}(?![a-z0-9+#])", corpus)
         )
-        # A multi-word subject is a conjunction: all meaningful words are
-        # required in the candidate instead of allowing a broad partial match.
         return hits == len(terms)

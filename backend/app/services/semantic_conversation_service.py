@@ -25,7 +25,7 @@ class SemanticConversation:
 
 
 class SemanticConversationService:
-    """Fast Ollama-assisted semantic routing with safe deterministic fallback."""
+    """Fast Ollama-assisted semantic routing with a conservative deterministic fallback."""
 
     ALLOWED_INTENTS = {
         "general", "company_courses", "topics", "fee", "discount", "duration",
@@ -71,6 +71,7 @@ class SemanticConversationService:
         "hows": "how is",
         "complition": "completion",
         "certifcate": "certificate",
+        "certification": "certificate",
         "timng": "timing",
         "timngs": "timings",
         "duraton": "duration",
@@ -219,19 +220,13 @@ Return JSON:
     def _fallback_subject(cls, message: str, available_subjects: list[str]) -> str | None:
         normalized = cls._canonicalize(message)
         available = [(cls._canonicalize(s), s) for s in available_subjects if str(s).strip()]
-
         for normalized_subject, original in available:
             short = re.sub(r"\s+(?:programming|course|training)$", "", normalized_subject).strip()
             aliases = {normalized_subject, short}
             if any(alias and re.search(rf"(?<![a-z0-9+#]){re.escape(alias)}(?![a-z0-9+#])", normalized) for alias in aliases):
                 return original
-
-        # A very short follow-up such as "Whats the fee?" has no explicit
-        # subject. When exactly one known subject is in scope, use it rather
-        # than leaving retrieval unscoped.
         if len(available) == 1:
             return available[0][1]
-
         patterns = (
             r"(?:fee|fees|price|pricing|cost|tuition|duration|timings?|schedule|topics?|syllabus|curriculum|mode|certificate|payment|eligibility|requirements?)\s+(?:for|of)\s+([a-z][a-z0-9+# ._-]{1,80})$",
             r"(?:for|about)\s+([a-z][a-z0-9+# ._-]{1,80})$",
@@ -284,10 +279,6 @@ Return JSON:
         return normalized.replace("what is is", "what is")
 
     @staticmethod
-    def _normalize(value: str) -> str:
-        return " ".join(str(value or "").lower().split()).strip(" ?!.,;:")
-
-    @staticmethod
     def _clean_subject(value) -> str | None:
         if value is None:
             return None
@@ -306,9 +297,6 @@ Return JSON:
             short = re.sub(r"\s+(?:programming|course|training)$", "", subject_normalized)
             if short and short in normalized:
                 return subject
-        if len(available_subjects) == 1 and normalized:
-            # Keep one in-scope subject available for short follow-up turns.
-            return available_subjects[0]
         return None
 
     @staticmethod

@@ -31,7 +31,7 @@ class SemanticConversationService:
         "general", "company_courses", "topics", "fee", "discount", "duration",
         "timings", "duration_and_timings", "mode", "admission", "contact",
         "company_information", "details", "availability", "certificate", "payment",
-        "eligibility", "lead", "unknown",
+        "eligibility", "lead", "unknown", "multi_part",
     }
 
     INTENT_HINTS = {
@@ -95,16 +95,17 @@ class SemanticConversationService:
             return None
 
     def fallback(self, message: str, conversation_context: str = "", available_subjects: list[str] | None = None) -> SemanticConversation:
-        normalized = self._normalize(message)
+        available = [str(s).strip() for s in (available_subjects or []) if str(s).strip()]
+        normalized = self._canonicalize(message)
         parts = self._split_questions(message)
         if not parts:
             parts = [message.strip()]
-        previous_subject = self._subject_from_context(conversation_context, available_subjects or [])
+        previous_subject = self._subject_from_context(conversation_context, available)
         questions: list[dict] = []
         for part in parts[:8]:
             canonical = self._canonicalize(part)
             intent = self._detect_fallback_intent(canonical)
-            subject = self._fallback_subject(canonical, available_subjects or []) or previous_subject
+            subject = self._fallback_subject(canonical, available) or previous_subject
             questions.append({"text": part.strip(), "intent": intent, "subject": subject})
         first = questions[0] if questions else {"intent": "general", "subject": previous_subject}
         intent = first["intent"]
@@ -201,14 +202,14 @@ Return JSON:
             return None
         if not available_subjects:
             return text
-        normalized = cls._normalize(text)
+        normalized = cls._canonicalize(text)
         best = None
         best_score = 0.0
         for candidate in available_subjects:
             candidate = str(candidate or "").strip()
             if not candidate:
                 continue
-            score = cls._subject_similarity(normalized, cls._normalize(candidate))
+            score = cls._subject_similarity(normalized, cls._canonicalize(candidate))
             if score > best_score:
                 best = candidate
                 best_score = score
@@ -217,15 +218,20 @@ Return JSON:
     @classmethod
     def _fallback_subject(cls, message: str, available_subjects: list[str]) -> str | None:
         normalized = cls._canonicalize(message)
-        available = [(cls._normalize(s), s) for s in available_subjects if str(s).strip()]
+        available = [(cls._canonicalize(s), s) for s in available_subjects if str(s).strip()]
+
         for normalized_subject, original in available:
-            aliases = {
-                normalized_subject,
-                normalized_subject.replace(" programming", ""),
-                normalized_subject.replace(" course", ""),
-            }
-            if any(alias and alias in normalized for alias in aliases):
+            short = re.sub(r"\s+(?:programming|course|training)$", "", normalized_subject).strip()
+            aliases = {normalized_subject, short}
+            if any(alias and re.search(rf"(?<![a-z0-9+#]){re.escape(alias)}(?![a-z0-9+#])", normalized) for alias in aliases):
                 return original
+
+        # A very short follow-up such as "Whats the fee?" has no explicit
+        # subject. When exactly one known subject is in scope, use it rather
+        # than leaving retrieval unscoped.
+        if len(available) == 1:
+            return available[0][1]
+
         patterns = (
             r"(?:fee|fees|price|pricing|cost|tuition|duration|timings?|schedule|topics?|syllabus|curriculum|mode|certificate|payment|eligibility|requirements?)\s+(?:for|of)\s+([a-z][a-z0-9+# ._-]{1,80})$",
             r"(?:for|about)\s+([a-z][a-z0-9+# ._-]{1,80})$",
@@ -233,7 +239,8 @@ Return JSON:
         for pattern in patterns:
             match = re.search(pattern, normalized)
             if match:
-                return match.group(1).strip(" ?.!")
+                raw_subject = match.group(1).strip(" ?.!")
+                return cls._canonical_subject(raw_subject, available_subjects)
         return None
 
     @classmethod
@@ -256,11 +263,9 @@ Return JSON:
         text = (message or "").strip()
         if not text:
             return []
-        # Primary split: explicit question marks.
         pieces = [p.strip() for p in re.split(r"\?(?:\s+|$)", text) if p.strip()]
         if len(pieces) > 1:
             return [p + "?" for p in pieces]
-        # Secondary split for messages joined by "and"/"also" with distinct interrogatives.
         parts = re.split(
             r"\s+(?=(?:what|what's|whats|which|how|can|could|would|is|are|do|does|will|where|when|who|why)\b)",
             text,
@@ -293,14 +298,17 @@ Return JSON:
 
     @classmethod
     def _subject_from_context(cls, context: str, available_subjects: list[str]) -> str | None:
-        normalized = cls._normalize(context)
+        normalized = cls._canonicalize(context)
         for subject in available_subjects:
-            subject_normalized = cls._normalize(subject)
+            subject_normalized = cls._canonicalize(subject)
             if subject_normalized and subject_normalized in normalized:
                 return subject
             short = re.sub(r"\s+(?:programming|course|training)$", "", subject_normalized)
             if short and short in normalized:
                 return subject
+        if len(available_subjects) == 1 and normalized:
+            # Keep one in-scope subject available for short follow-up turns.
+            return available_subjects[0]
         return None
 
     @staticmethod

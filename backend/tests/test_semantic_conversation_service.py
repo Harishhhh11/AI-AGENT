@@ -52,3 +52,16 @@ def test_fallback_splits_multi_question_message():
     assert len(result.questions) == 2
     assert result.questions[0]["intent"] == "fee"
     assert result.questions[1]["intent"] == "timings"
+
+
+def test_fallback_single_question_not_marked_multi_part():
+    service = SemanticConversationService(None)
+    result = service.fallback("What is the duration for Python?", "")
+    assert len(result.questions) == 1
+    assert result.intent == "duration"
+
+
+def test_fallback_preserves_only_known_subjects_when_available():
+    service = SemanticConversationService(None)
+    result = service.fallback("Whats the fee?", available_subjects=["Java Programming", "Python Programming"])
+    assert result.questions[0]["subject"] is None

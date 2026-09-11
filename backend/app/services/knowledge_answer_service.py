@@ -12,9 +12,12 @@ class KnowledgeAnswerService:
         "fee": {"fee", "fees", "price", "pricing", "cost", "costs", "tuition"},
         "discount": {"discount", "discounts", "concession", "reduction", "offer"},
         "duration": {"duration", "length", "months", "weeks", "days"},
-        "timings": {"timing", "timings", "schedule", "batch", "morning", "evening", "start"},
-        "mode": {"online", "offline", "classroom", "mode", "remote", "remotely"},
+        "timings": {"timing", "timings", "schedule", "batch", "batches", "morning", "afternoon", "evening", "start"},
+        "mode": {"online", "offline", "classroom", "mode", "remote", "remotely", "virtual"},
         "contact": {"phone", "mobile", "email", "address", "location", "contact"},
+        "certificate": {"certificate", "certification", "completion"},
+        "payment": {"payment", "pay", "installment", "installments", "paid", "full", "advance"},
+        "eligibility": {"eligibility", "eligible", "requirement", "requirements", "required", "qualification", "qualifications", "who", "join"},
     }
 
     SUPPORTING_DETAIL_TERMS = {
@@ -40,11 +43,12 @@ class KnowledgeAnswerService:
         ),
         "duration": (
             r"(?P<label>duration)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>course\s+length)\s*[:\-]\s*(?P<value>[^.\n]+)",
             r"(?P<label>duration)\s+(?P<verb>is|of)\s+(?P<value>[^.\n]+)",
         ),
         "timings": (
             r"(?P<label>(?:class\s+)?schedule)\s*[:\-]\s*(?P<value>[^.\n]+)",
-            r"(?P<label>(?:class\s+)?timings?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>(?:batch\s+)?timings?)\s*[:\-]\s*(?P<value>[^.\n]+)",
             r"(?P<label>(?:class\s+)?timings?)\s+(?P<verb>are|is)\s+(?P<value>[^.\n]+)",
         ),
         "mode": (
@@ -55,6 +59,18 @@ class KnowledgeAnswerService:
         "contact": (
             r"(?P<label>contact)\s*[:\-]\s*(?P<value>[^.\n]+)",
             r"(?P<label>(?:phone|mobile|email|address|location))\s*[:\-]\s*(?P<value>[^.\n]+)",
+        ),
+        "certificate": (
+            r"(?P<label>(?:completion\s+)?certificate(?:s)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>certificate)\s*(?:is|are)\s*[:\-]?\s*(?P<value>[^.\n]+)",
+        ),
+        "payment": (
+            r"(?P<label>payment(?:\s+method|\s+options?)?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>payment)\s*(?:is|can be|may be)\s*[:\-]?\s*(?P<value>[^.\n]+)",
+        ),
+        "eligibility": (
+            r"(?P<label>eligibility|requirements?|qualifications?)\s*[:\-]\s*(?P<value>[^.\n]+)",
+            r"(?P<label>who\s+can\s+join)\s*[:\-]?\s*(?P<value>[^.\n]+)",
         ),
     }
 
@@ -87,17 +103,16 @@ class KnowledgeAnswerService:
                 fact_key = self._fact_key(source_fact)
                 if fact_key in seen_facts:
                     continue
-                answer_text = f"{title}: {source_fact}" if title else source_fact
-                answers.append(answer_text)
+                answers.append(f"{title}: {source_fact}" if title else source_fact)
                 seen_facts.add(fact_key)
-            else:
-                pieces = self._pieces(content)
-                matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
-                for piece in self._attach_supporting_details(pieces, matching)[:6]:
-                    fact_key = self._fact_key(piece)
-                    if fact_key and fact_key not in seen_facts:
-                        seen_facts.add(fact_key)
-                        answers.append(f"{title}: {piece}" if title else piece)
+                continue
+            pieces = self._pieces(content)
+            matching = [piece for piece in pieces if self._contains_fact(piece, labels)]
+            for piece in self._attach_supporting_details(pieces, matching)[:6]:
+                fact_key = self._fact_key(piece)
+                if fact_key and fact_key not in seen_facts:
+                    seen_facts.add(fact_key)
+                    answers.append(f"{title}: {piece}" if title else piece)
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
@@ -109,15 +124,24 @@ class KnowledgeAnswerService:
             if not cls._contains_fact(piece, cls.FACT_LABELS[field]):
                 continue
             extracted = cls._extract_field(piece, field)
-            if not extracted:
-                continue
-            result = extracted if field in {"timings", "duration", "mode"} else piece.strip()
-            if index + 1 < len(pieces):
-                candidate = pieces[index + 1]
-                candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
-                if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
-                    result = f"{result} {candidate.strip()}"
-            return result.strip()
+            if extracted is not None:
+                result = extracted
+                if field in {"timings", "duration", "mode", "certificate", "payment", "eligibility"}:
+                    result = result.rstrip(".") + "."
+                if index + 1 < len(pieces):
+                    candidate = pieces[index + 1]
+                    candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
+                    if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
+                        result = f"{result.rstrip('.')} {candidate.strip()}"
+                return result.strip()
+            if field in {"mode", "certificate", "payment", "eligibility", "fee", "discount"}:
+                result = piece.strip()
+                if index + 1 < len(pieces):
+                    candidate = pieces[index + 1]
+                    candidate_terms = set(re.findall(r"[a-z0-9+#.-]+", candidate.lower()))
+                    if candidate_terms & cls.SUPPORTING_DETAIL_TERMS:
+                        result = f"{result.rstrip('.')} {candidate.strip()}"
+                return result.rstrip('.') + "."
         return None
 
     @classmethod
@@ -147,10 +171,6 @@ class KnowledgeAnswerService:
         return text.rstrip(".")
 
     @classmethod
-    def _normalize_fact(cls, value: str) -> str:
-        return cls._fact_key(value)
-
-    @classmethod
     def _course_catalog(cls, items: list[object]) -> str | None:
         names: list[str] = []
         seen: set[str] = set()
@@ -158,26 +178,16 @@ class KnowledgeAnswerService:
             content = cls._clean_preserve_lines(getattr(item, "content", ""))
             title = cls._clean(getattr(item, "title", ""))
             candidates = [match.group(1).strip() for match in cls.COURSE_HEADING_PATTERN.finditer(content)]
-            if not candidates and title and not re.search(r"company|knowledge|faq|general", title, re.IGNORECASE):
-                candidates = [title]
+            if title and not re.search(r"company|knowledge|faq|general", title, re.IGNORECASE):
+                candidates.append(title)
             for candidate in candidates:
                 candidate = re.sub(r"\s+", " ", candidate).strip(" -:")
                 normalized = candidate.lower()
-                if normalized and normalized not in seen:
-                    seen.add(normalized)
-                    names.append(candidate)
-        if names:
-            return "We currently offer: " + ", ".join(names) + "."
-
-        fallback: list[str] = []
-        for item in items:
-            title = cls._clean(getattr(item, "title", ""))
-            if title and not re.search(r"company|knowledge|faq|general", title, re.IGNORECASE):
-                normalized = title.lower()
-                if normalized not in seen:
-                    seen.add(normalized)
-                    fallback.append(title)
-        return "We currently offer: " + ", ".join(fallback) + "." if fallback else None
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                names.append(candidate)
+        return "We currently offer: " + ", ".join(names) + "." if names else None
 
     @classmethod
     def _topics_answer(cls, items: list[object]) -> str | None:
@@ -186,46 +196,36 @@ class KnowledgeAnswerService:
         for item in items:
             title = cls._clean(getattr(item, "title", ""))
             content = cls._clean_preserve_lines(getattr(item, "content", ""))
-            if not content:
-                continue
             pieces = cls._pieces(content)
             for index, piece in enumerate(pieces):
-                if not cls._contains_fact(piece, cls.TOPIC_HEADING_TERMS):
-                    continue
-                candidate = piece
                 match = re.search(r"(?:topics?|syllabus|curriculum|content)\s*[:\-]\s*(.+)", piece, re.IGNORECASE)
-                if match:
-                    candidate = match.group(1).strip()
-                if candidate.lower().startswith(("what is covered", "topics covered")):
-                    candidate = piece
-                dedupe = cls._fact_key(candidate)
-                if dedupe and dedupe not in seen:
-                    seen.add(dedupe)
+                candidate = match.group(1).strip() if match else (piece if cls._contains_fact(piece, cls.TOPIC_HEADING_TERMS) else None)
+                if not candidate:
+                    continue
+                key = cls._fact_key(candidate)
+                if key and key not in seen:
+                    seen.add(key)
                     answers.append(f"{title}: {candidate}" if title else candidate)
-                if index + 1 < len(pieces):
+                if index + 1 < len(pieces) and cls._looks_like_topic_continuation(pieces[index + 1]):
                     next_piece = pieces[index + 1]
-                    if not cls._contains_fact(next_piece, cls.FACT_LABELS["fee"]) and cls._looks_like_topic_continuation(next_piece):
-                        dedupe = cls._fact_key(next_piece)
-                        if dedupe and dedupe not in seen:
-                            seen.add(dedupe)
-                            answers.append(f"{title}: {next_piece}" if title else next_piece)
-            if not answers and title:
-                # The entire record may be a topic syllabus without an explicit
-                # "Topics:" label. Avoid returning unrelated fees/contact facts.
+                    next_key = cls._fact_key(next_piece)
+                    if next_key and next_key not in seen:
+                        seen.add(next_key)
+                        answers.append(f"{title}: {next_piece}" if title else next_piece)
+            if not answers:
                 topic_lines = [piece for piece in pieces if cls._looks_like_topic_continuation(piece)]
-                if topic_lines:
-                    for piece in topic_lines[:6]:
-                        dedupe = cls._fact_key(piece)
-                        if dedupe and dedupe not in seen:
-                            seen.add(dedupe)
-                            answers.append(f"{title}: {piece}")
+                for piece in topic_lines[:6]:
+                    key = cls._fact_key(piece)
+                    if key and key not in seen:
+                        seen.add(key)
+                        answers.append(f"{title}: {piece}" if title else piece)
             if len(answers) >= 8:
                 break
         return " ".join(answers) if answers else None
 
-    @classmethod
-    def _looks_like_topic_continuation(cls, piece: str) -> bool:
-        lower = cls._clean(piece).lower()
+    @staticmethod
+    def _looks_like_topic_continuation(piece: str) -> bool:
+        lower = re.sub(r"\s+", " ", str(piece or "")).lower()
         return any(token in lower for token in (
             "variable", "function", "oop", "object", "class", "loop", "string", "list", "tuple", "dictionary",
             "api", "project", "database", "sql", "power bi", "excel", "python", "java", "javascript", "react",
@@ -251,9 +251,7 @@ class KnowledgeAnswerService:
             used += len(block) + 2
             if len(parts) >= 6:
                 break
-        if not parts:
-            return None
-        return ("Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)) if company_wide else " ".join(parts)
+        return ("Here’s what I found in the verified knowledge base:\n" + "\n".join(parts)) if parts else None
 
     @classmethod
     def _attach_supporting_details(cls, pieces: list[str], matching: list[str]) -> list[str]:

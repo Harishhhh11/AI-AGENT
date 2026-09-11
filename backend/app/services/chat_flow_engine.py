@@ -6,7 +6,11 @@ from app.services.semantic_conversation_service import SemanticConversationServi
 
 
 class ChatFlowEngine:
-    """Orchestrates semantic analysis, query decomposition, retrieval and synthesis."""
+    """Orchestrates semantic analysis, independent retrieval, grounding and synthesis."""
+
+    MAX_QUESTIONS = 8
+    RETRIEVAL_LIMIT = 4
+    MAX_GROUNDED_ITEMS = 12
 
     def __init__(self, llm, retrieval_service, grounding_service, answer_orchestrator, knowledge_service):
         self.semantic = SemanticConversationService(llm)
@@ -30,17 +34,17 @@ class ChatFlowEngine:
                 available_subjects=available_subjects,
             )
 
-        if previous_subject and not semantic.subject:
+        # Apply conversation subject only when the current semantic turn did not
+        # identify a more specific subject. Never override an explicit subject.
+        if previous_subject:
+            questions = [
+                {**question, "subject": question.get("subject") or previous_subject}
+                for question in semantic.questions
+            ]
             semantic = semantic.__class__(
                 intent=semantic.intent,
-                subject=previous_subject,
-                questions=[
-                    {
-                        **q,
-                        "subject": q.get("subject") or previous_subject,
-                    }
-                    for q in semantic.questions
-                ],
+                subject=semantic.subject or previous_subject,
+                questions=questions,
                 response_style=semantic.response_style,
                 requires_knowledge=semantic.requires_knowledge,
                 wants_lead_action=semantic.wants_lead_action,
@@ -50,34 +54,45 @@ class ChatFlowEngine:
             semantic=semantic,
             fallback_subject=previous_subject,
             original_message=message,
-        )
+        )[: self.MAX_QUESTIONS]
+
+        # General conversation does not need retrieval. This keeps normal chat
+        # fast while factual turns stay grounded in verified knowledge.
+        if not semantic.requires_knowledge:
+            return semantic, queries, []
+
         knowledge = []
-        for item in queries[:8]:
+        for query_plan in queries:
             results = self.retrieval.retrieve(
                 organization_id=organization_id,
-                query=item["query"],
-                limit=6,
-                subject=item.get("subject"),
+                query=query_plan["query"],
+                limit=self.RETRIEVAL_LIMIT,
+                subject=query_plan.get("subject"),
                 agent_id=agent_id,
             )
             for result in results:
                 decision = self.grounding.evaluate(
-                    query=item["query"],
+                    query=query_plan["query"],
                     title=str(getattr(result, "title", "") or ""),
                     content=str(getattr(result, "content", "") or ""),
                     semantic_distance=getattr(result, "semantic_distance", None),
                 )
-                if decision.accepted or item.get("subject"):
+                if decision.accepted:
                     knowledge.append(result)
+
+        # Preserve the strongest occurrence of each knowledge row and keep the
+        # prompt bounded even for many-question turns.
         deduped = []
         seen = set()
         for item in knowledge:
-            key = getattr(item, "id", id(item))
+            key = getattr(item, "id", None)
+            if key is None:
+                key = (getattr(item, "title", ""), getattr(item, "content", ""))
             if key in seen:
                 continue
             seen.add(key)
             deduped.append(item)
-            if len(deduped) >= 12:
+            if len(deduped) >= self.MAX_GROUNDED_ITEMS:
                 break
         return semantic, queries, deduped
 
@@ -90,8 +105,8 @@ class ChatFlowEngine:
             )
         except Exception:
             return []
-        return [
+        return list(dict.fromkeys(
             str(getattr(item, "title", "") or "").strip()
             for item in items
             if getattr(item, "is_active", True) and str(getattr(item, "title", "") or "").strip()
-        ]
+        ))

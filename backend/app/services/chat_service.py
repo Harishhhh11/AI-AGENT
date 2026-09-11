@@ -5,6 +5,8 @@ import re
 from sqlalchemy.orm import Session
 
 from app.llm.llm_factory import get_llm
+from app.services.answer_orchestrator import AnswerOrchestrator
+from app.services.chat_flow_engine import ChatFlowEngine
 from app.services.conversation_service import ConversationService
 from app.services.context_service import ContextService
 from app.services.conversation_subject_service import ConversationSubjectService
@@ -16,15 +18,12 @@ from app.services.lead_service import LeadService
 from app.services.relevance_service import RelevanceService
 from app.services.response_policy_service import ResponsePolicyService
 from app.services.retrieval_service import RetrievalService
-from app.services.semantic_conversation_service import SemanticConversationService
 from app.tools.base import ToolContext
 from app.tools.registry import ToolOrchestrator
 
 
 class ChatService:
     CONVERSATION_HISTORY_LIMIT = 16
-    KNOWLEDGE_LIMIT = 6
-    MAX_KNOWLEDGE_CHARS = 8000
     MAX_CONVERSATION_CONTEXT_CHARS = 7000
     MAX_SHORT_RESPONSE_CHARS = 500
     MAX_MEDIUM_RESPONSE_CHARS = 1400
@@ -37,158 +36,226 @@ class ChatService:
         except Exception as exc:
             print("LLM initialization error:", exc)
             self.llm = None
+
         self.conversation_service = ConversationService(db)
         self.knowledge_service = KnowledgeService(db)
         self.retrieval_service = RetrievalService(self.knowledge_service)
         self.context_service = ContextService(message_limit=self.CONVERSATION_HISTORY_LIMIT)
-        self.semantic_conversation_service = SemanticConversationService(self.llm)
         self.conversation_subject_service = ConversationSubjectService()
         self.response_policy_service = ResponsePolicyService()
         self.relevance_service = RelevanceService()
         self.grounding_service = GroundingService(relevance_service=self.relevance_service)
         self.knowledge_answer_service = KnowledgeAnswerService()
+        self.answer_orchestrator = AnswerOrchestrator(self.llm, self.knowledge_answer_service)
+        self.chat_flow_engine = ChatFlowEngine(
+            self.llm,
+            self.retrieval_service,
+            self.grounding_service,
+            self.answer_orchestrator,
+            self.knowledge_service,
+        )
         self.lead_service = LeadService(db)
         self.lead_context_service = LeadContextService()
         self.tool_orchestrator = ToolOrchestrator()
 
-    async def generate_response(self, message: str, organization_id: int, user_id: int | None = None, session_id: str | None = None, agent_id: int | None = None, agent_instructions: str | None = None) -> tuple[str, str]:
+    async def generate_response(
+        self,
+        message: str,
+        organization_id: int,
+        user_id: int | None = None,
+        session_id: str | None = None,
+        agent_id: int | None = None,
+        agent_instructions: str | None = None,
+    ) -> tuple[str, str]:
         message = (message or "").strip()
         if not message:
             return session_id or "", "How can I help you?"
 
         conversation = self.conversation_service.get_or_create_conversation(
-            session_id=session_id, organization_id=organization_id, user_id=user_id, agent_id=agent_id
+            session_id=session_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            agent_id=agent_id,
         )
         self.conversation_service.add_message(conversation.id, "user", message)
         all_messages = self.conversation_service.get_messages(conversation.id)
-        previous_messages = self._remove_current_message(list(all_messages)[-self.CONVERSATION_HISTORY_LIMIT:], message)
-        persisted_lead = self.lead_service.get_lead_for_conversation(conversation.id, organization_id)
+        previous_messages = self._remove_current_message(
+            list(all_messages)[-self.CONVERSATION_HISTORY_LIMIT :], message
+        )
+
+        persisted_lead = self.lead_service.get_lead_for_conversation(
+            conversation.id, organization_id
+        )
         lead_context = self.lead_context_service.build_context(
             conversation=previous_messages + [{"role": "user", "content": message}],
             extracted_lead=persisted_lead,
         )
+        conversation_context = self._limit_text(
+            self.context_service.build_context(previous_messages),
+            self.MAX_CONVERSATION_CONTEXT_CHARS,
+        )
 
-        conversation_context = self._limit_text(self.context_service.build_context(previous_messages), self.MAX_CONVERSATION_CONTEXT_CHARS)
-        semantic = await self.semantic_conversation_service.analyze(
+        # Fixed identity behavior is intentionally handled before model/tool work.
+        if self._is_identity_question(message):
+            return self._finish(
+                conversation.id,
+                conversation.session_id,
+                self._identity_response(),
+            )
+
+        semantic, query_plan, knowledge_items = await self.chat_flow_engine.run(
             message=message,
             conversation_context=conversation_context,
-            available_subjects=self._knowledge_subjects(organization_id, agent_id),
+            organization_id=organization_id,
+            agent_id=agent_id,
+            previous_subject=self._recent_subject(previous_messages, organization_id, agent_id),
         )
-        if semantic is None:
-            semantic = self.semantic_conversation_service.fallback(message, conversation_context)
 
+        intent = semantic.intent
+        current_subject = semantic.subject
         analysis = self.context_service.analyze_message(message=message, messages=previous_messages)
         message_type = analysis.get("message_type") or "general"
-        intent = semantic.intent if semantic.intent != "unknown" else (analysis.get("intent") or "general")
-        current_subject = semantic.subject or analysis.get("subject")
-        previous_subject = analysis.get("previous_subject")
-        if not current_subject:
-            current_subject = self._subject_from_recent_context(previous_subject, previous_messages, semantic)
-        retrieval_query = (analysis.get("retrieval_query") or message).strip()
-        if current_subject and current_subject.lower() not in retrieval_query.lower() and intent not in {"company_courses", "company_information"}:
-            retrieval_query = f"{current_subject} {message}"[: self.context_service.MAX_RETRIEVAL_QUERY_LENGTH]
-        requires_knowledge = bool(semantic.requires_knowledge or analysis.get("requires_knowledge"))
+        previous_subject = analysis.get("previous_subject") or current_subject
+        requires_knowledge = semantic.requires_knowledge
         question_count = max(1, len(semantic.questions))
-
-        if self._is_identity_question(message):
-            return self._finish(conversation.id, conversation.session_id, self._identity_response())
 
         factual_intents = {
             "fee", "discount", "topics", "duration", "timings", "duration_and_timings",
-            "mode", "contact", "availability", "company_information", "company_courses", "details",
+            "mode", "contact", "availability", "company_information", "company_courses",
+            "details", "certificate", "payment", "eligibility", "admission",
         }
         lead_requested = self.lead_context_service.detect_lead_intent(message)
-        if (lead_requested or semantic.wants_lead_action) and intent not in factual_intents and not lead_context.is_complete:
+        if (
+            (lead_requested or semantic.wants_lead_action)
+            and intent not in factual_intents
+            and not lead_context.is_complete
+        ):
             lead_context.is_lead = True
             await self._save_lead_context(conversation.id, organization_id, lead_context)
             response = self.lead_context_service.get_next_question(lead_context)
-            return self._finish(conversation.id, conversation.session_id, response or "Sure. Which course, product, or service are you interested in?")
+            return self._finish(
+                conversation.id,
+                conversation.session_id,
+                response or "Sure. Which course, product, or service are you interested in?",
+            )
 
         active_field = self._get_active_lead_field(previous_messages)
         if active_field:
             valid, _ = self.lead_context_service.validate_field_answer(active_field, message)
             if valid:
-                response = await self._handle_active_lead_field(message, lead_context, active_field, conversation.id, organization_id)
+                response = await self._handle_active_lead_field(
+                    message,
+                    lead_context,
+                    active_field,
+                    conversation.id,
+                    organization_id,
+                )
                 return self._finish(conversation.id, conversation.session_id, response)
             if intent not in factual_intents and not requires_knowledge:
-                return self._finish(conversation.id, conversation.session_id, self._invalid_lead_field_response(active_field))
+                return self._finish(
+                    conversation.id,
+                    conversation.session_id,
+                    self._invalid_lead_field_response(active_field),
+                )
 
         resolution = self.conversation_subject_service.resolve(
-            message=message, intent=intent, previous_messages=previous_messages, previous_subject=current_subject or previous_subject
+            message=message,
+            intent=intent,
+            previous_messages=previous_messages,
+            previous_subject=current_subject or previous_subject,
         )
         current_subject = resolution.current_subject or current_subject
         previous_subject = resolution.previous_subject or previous_subject
 
         plan = self.response_policy_service.plan(
-            message=message, intent=intent, question_count=question_count, requires_knowledge=requires_knowledge
+            message=message,
+            intent=intent,
+            question_count=question_count,
+            requires_knowledge=requires_knowledge,
         )
         response_style = semantic.response_style or plan.style
-        question_count = plan.question_count if question_count <= 1 else question_count
 
+        # Tool authority stays outside the semantic model. The orchestrator is free
+        # to choose approved actions, but it cannot alter tenant/agent identity.
         await self.tool_orchestrator.decide_and_execute(
             llm=self.llm,
             context=ToolContext(
-                db=self.db, organization_id=organization_id, conversation_id=conversation.id,
-                user_id=user_id, message=message, lead_context=lead_context,
+                db=self.db,
+                organization_id=organization_id,
+                conversation_id=conversation.id,
+                user_id=user_id,
+                message=message,
+                lead_context=lead_context,
             ),
         )
 
-        knowledge_items = []
-        if requires_knowledge:
-            retrieval_subject = current_subject or (previous_subject if message_type in {"follow_up", "confirmation"} else None)
-            knowledge_items = self.retrieval_service.retrieve(
-                organization_id=organization_id, query=retrieval_query, limit=self.KNOWLEDGE_LIMIT,
-                subject=retrieval_subject, agent_id=agent_id,
-            )
-            knowledge_items = self._ground_candidates(knowledge_items, retrieval_query, current_subject)
-
         if requires_knowledge and not knowledge_items:
-            return self._finish(conversation.id, conversation.session_id, self._build_missing_information_response(current_subject))
-
-        deterministic = self.knowledge_answer_service.answer(
-            items=knowledge_items, intent=intent, subject=current_subject, response_style=response_style
-        ) if knowledge_items else None
-        if deterministic:
             return self._finish(
-                conversation.id, conversation.session_id,
-                self._apply_response_length_guard(self._clean_response(deterministic), response_style),
+                conversation.id,
+                conversation.session_id,
+                self._build_missing_information_response(current_subject),
             )
 
-        prompt = self._build_receptionist_prompt(
-            current_message=message, message_type=message_type, current_subject=current_subject,
-            explicit_subject=resolution.explicit_subject, previous_subject=previous_subject, intent=intent,
-            response_style=response_style, question_count=question_count, conversation_context=conversation_context,
-            knowledge_context=self._build_knowledge_context(knowledge_items), has_verified_knowledge=bool(knowledge_items),
-            lead_context=lead_context, agent_instructions=agent_instructions,
+        # The orchestrator decides whether exact verified facts are enough or an
+        # Ollama synthesis is required. Multi-intent requests are composed in one
+        # bounded generation instead of repeatedly asking the model to answer.
+        response = await self.answer_orchestrator.compose(
+            semantic=semantic,
+            original_message=message,
+            conversation_context=conversation_context,
+            scoped_items=knowledge_items,
+            response_style=response_style,
         )
-        try:
-            response = await self.llm.generate(prompt) if self.llm else ""
-        except Exception as exc:
-            print("LLM generation error:", exc)
-            response = "Sorry, I couldn't process that right now."
+
+        if not response and not requires_knowledge:
+            prompt = self._build_receptionist_prompt(
+                current_message=message,
+                message_type=message_type,
+                current_subject=current_subject,
+                explicit_subject=resolution.explicit_subject,
+                previous_subject=previous_subject,
+                intent=intent,
+                response_style=response_style,
+                question_count=question_count,
+                conversation_context=conversation_context,
+                knowledge_context="",
+                has_verified_knowledge=False,
+                lead_context=lead_context,
+                agent_instructions=agent_instructions,
+            )
+            try:
+                response = await self.llm.generate(prompt) if self.llm else ""
+            except Exception as exc:
+                print("LLM generation error:", exc)
+                response = "Sorry, I couldn't process that right now."
+
         return self._finish(
-            conversation.id, conversation.session_id,
+            conversation.id,
+            conversation.session_id,
             self._apply_response_length_guard(self._clean_response(response), response_style),
         )
 
-    def _knowledge_subjects(self, organization_id: int, agent_id: int | None) -> list[str]:
+    def _recent_subject(self, previous_messages, organization_id: int, agent_id: int | None) -> str | None:
         try:
-            items = self.knowledge_service.get_all(organization_id=organization_id, agent_id=agent_id, scope="available")
-        except Exception as exc:
-            print("Knowledge subject loading error:", exc)
-            return []
-        return [str(getattr(item, "title", "") or "").strip() for item in items if getattr(item, "is_active", True)]
-
-    @staticmethod
-    def _subject_from_recent_context(previous_subject, previous_messages, semantic):
-        if previous_subject:
-            return previous_subject
-        for item in reversed(list(previous_messages or [])):
-            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
-            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
-            if str(role or "").lower() == "user" and content:
-                if semantic.subject and semantic.subject.lower() in str(content).lower():
-                    return semantic.subject
+            subjects = [
+                str(getattr(item, "title", "") or "").strip()
+                for item in self.knowledge_service.get_all(
+                    organization_id=organization_id,
+                    agent_id=agent_id,
+                    scope="available",
+                )
+                if getattr(item, "is_active", True)
+            ]
+        except Exception:
+            subjects = []
+        context = self.context_service.build_context(previous_messages)
+        if not context:
+            return None
+        normalized = context.lower()
+        for subject in subjects:
+            short = re.sub(r"\s+(?:programming|course|training)$", "", subject.lower()).strip()
+            if subject.lower() in normalized or (short and short in normalized):
+                return subject
         return None
 
     @staticmethod
@@ -196,32 +263,17 @@ class ChatService:
         normalized = " ".join((message or "").lower().strip().replace("/", " ").split())
         normalized = re.sub(r"[?!.,;:]+$", "", normalized).strip()
         return normalized in {
-            "who are you", "what is your name", "whats your name", "what's your name",
-            "who are u", "what can you do",
+            "who are you",
+            "what is your name",
+            "whats your name",
+            "what's your name",
+            "who are u",
+            "what can you do",
         }
 
     @staticmethod
     def _identity_response() -> str:
         return "I'm Astra, your AI receptionist. I help customers with the verified information and services provided by this receptionist."
-
-    def _ground_candidates(self, items, query: str, current_subject: str | None):
-        grounded = []
-        for item in items or []:
-            decision = self.grounding_service.evaluate(
-                query=query, title=str(getattr(item, "title", "") or ""),
-                content=str(getattr(item, "content", "") or ""),
-                semantic_distance=getattr(item, "semantic_distance", None),
-            )
-            if decision.accepted or (current_subject and self._subject_in_item(current_subject, item)):
-                grounded.append(item)
-        return grounded
-
-    @staticmethod
-    def _subject_in_item(subject: str, item: object) -> bool:
-        terms = [token for token in re.findall(r"[a-z0-9+#.-]+", subject.lower()) if len(token) > 1]
-        corpus = " ".join(str(getattr(item, attr, "") or "").lower() for attr in ("title", "category", "content"))
-        hits = sum(bool(re.search(rf"(?<![a-z0-9+#]){re.escape(term)}(?![a-z0-9+#])", corpus)) for term in terms)
-        return bool(terms) and hits >= max(1, (len(terms) + 1) // 2)
 
     def _finish(self, conversation_id, session_id, response):
         clean = self._clean_response(response)
@@ -236,7 +288,7 @@ class ChatService:
             role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
             content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
             if str(role or "").lower() == "user" and str(content or "").strip() == current_message:
-                return normalized[:index] + normalized[index + 1:]
+                return normalized[:index] + normalized[index + 1 :]
         return normalized
 
     @staticmethod
@@ -280,77 +332,41 @@ class ChatService:
 
     async def _save_lead_context(self, conversation_id, organization_id, lead_context):
         self.lead_service.upsert_lead(
-            conversation_id=conversation_id, organization_id=organization_id, name=lead_context.name,
-            phone=lead_context.phone, email=lead_context.email, interest=lead_context.interest,
-            preferred_mode=lead_context.preferred_mode, preferred_time=lead_context.preferred_time,
+            conversation_id=conversation_id,
+            organization_id=organization_id,
+            name=lead_context.name,
+            phone=lead_context.phone,
+            email=lead_context.email,
+            interest=lead_context.interest,
+            preferred_mode=lead_context.preferred_mode,
+            preferred_time=lead_context.preferred_time,
             notes=lead_context.notes,
         )
 
     @staticmethod
     def _limit_text(text: str, max_chars: int) -> str:
         value = str(text or "")
-        return value if len(value) <= max_chars else value[:max_chars - 3].rstrip() + "..."
+        return value if len(value) <= max_chars else value[: max_chars - 3].rstrip() + "..."
 
     @staticmethod
-    def _clean_response(response: str) -> str:
+    def _clean_response(response: str | None) -> str:
         text = str(response or "").strip()
         text = re.sub(r"^(?:AI|Astra|Assistant|AI Receptionist)\s*[:\-]\s*", "", text, flags=re.IGNORECASE)
         return text or "I don't currently have that information."
 
     def _apply_response_length_guard(self, response: str, response_style: str) -> str:
-        limits = {"short": self.MAX_SHORT_RESPONSE_CHARS, "medium": self.MAX_MEDIUM_RESPONSE_CHARS, "long": self.MAX_LONG_RESPONSE_CHARS}
+        limits = {
+            "short": self.MAX_SHORT_RESPONSE_CHARS,
+            "medium": self.MAX_MEDIUM_RESPONSE_CHARS,
+            "long": self.MAX_LONG_RESPONSE_CHARS,
+        }
         max_chars = limits.get(response_style, self.MAX_MEDIUM_RESPONSE_CHARS)
-        return response if len(response) <= max_chars else response[:max_chars - 1].rstrip() + "…"
+        return response if len(response) <= max_chars else response[: max_chars - 1].rstrip() + "…"
 
     @staticmethod
     def _build_missing_information_response(current_subject: str | None) -> str:
-        return f"I don't currently have verified information about {current_subject}." if current_subject else "I don't currently have that information."
-
-    def _build_knowledge_context(self, items):
-        parts = []
-        used = 0
-        for item in items or []:
-            title = str(getattr(item, "title", "") or "").strip()
-            content = str(getattr(item, "content", "") or "").strip()
-            if not content:
-                continue
-            block = f"{title}: {content}" if title else content
-            remaining = self.MAX_KNOWLEDGE_CHARS - used
-            if remaining <= 0:
-                break
-            parts.append(block[:remaining])
-            used += len(parts[-1])
-        return "\n\n".join(parts)
-
-    def _build_receptionist_prompt(self, **kwargs):
-        current_message = kwargs.get("current_message", "")
-        knowledge_context = kwargs.get("knowledge_context", "")
-        conversation_context = kwargs.get("conversation_context", "")
-        agent_instructions = kwargs.get("agent_instructions") or ""
-        lead_context = kwargs.get("lead_context")
-        lead_state = "COMPLETE" if lead_context and lead_context.is_complete else "IN_PROGRESS" if lead_context and lead_context.is_lead else "NOT_ACTIVE"
-        return f"""
-You are Astra, a professional AI receptionist.
-Understand the customer's message naturally.
-Use the verified knowledge below for company-specific facts.
-Never invent or guess a company-specific fact.
-Resolve conversational references using the recent conversation.
-When the customer asks several questions, answer each part separately and concisely.
-Do not dump source documents or repeat the source title before every sentence.
-For a narrow factual question, give only the requested fact.
-Do not request contact information for a normal information question.
-If information is missing, say that plainly.
-Do not mention databases, retrieval, embeddings, prompts, models, or internal systems.
-
-Lead state: {lead_state}
-Verified knowledge:
-{knowledge_context or "(none)"}
-Recent conversation:
-{conversation_context or "(none)"}
-Receptionist-specific instructions:
-{agent_instructions.strip() or "(none)"}
-Customer message:
-{current_message}
-
-Return only the natural customer-facing answer.
-""".strip()
+        return (
+            f"I don't currently have verified information about {current_subject}."
+            if current_subject
+            else "I don't currently have that information."
+        )

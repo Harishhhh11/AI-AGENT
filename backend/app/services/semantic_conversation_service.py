@@ -23,20 +23,22 @@ class SemanticConversationService:
     ALLOWED_INTENTS = {
         "general", "company_courses", "topics", "fee", "discount", "duration",
         "timings", "duration_and_timings", "mode", "admission", "contact",
-        "company_information", "details", "availability", "lead", "unknown",
+        "company_information", "details", "availability", "certificate", "payment",
+        "lead", "unknown",
     }
 
-    FALLBACK_INTENT_MARKERS = {
-        "fee": ("fee", "fees", "price", "pricing", "cost", "tuition", "payment", "pay"),
-        "timings": ("timing", "timings", "schedule", "batch", "class time", "when is the class"),
-        "duration": ("duration", "how long", "length", "months", "weeks", "days"),
-        "topics": ("topic", "topics", "syllabus", "curriculum", "covered", "cover", "content"),
-        "mode": ("online", "offline", "classroom", "remote", "virtual"),
-        "contact": ("contact", "phone", "mobile", "email", "address", "location"),
-        "certificate": ("certificate", "certification", "completion certificate"),
-        "admission": ("join", "enroll", "enrol", "register", "admission", "sign up"),
-        "company_courses": ("what do you offer", "which courses", "what courses", "courses available"),
-    }
+    FALLBACK_MARKERS = (
+        ("duration", ("duration", "how long", "length", "months", "weeks", "days")),
+        ("timings", ("timing", "timings", "schedule", "batch", "class time", "when is the class")),
+        ("certificate", ("certificate", "certification", "completion certificate")),
+        ("payment", ("payment", "pay", "installment", "installments")),
+        ("fee", ("fee", "fees", "price", "pricing", "cost", "tuition")),
+        ("topics", ("topic", "topics", "syllabus", "curriculum", "covered", "cover", "content")),
+        ("mode", ("online", "offline", "classroom", "remote", "virtual")),
+        ("contact", ("contact", "phone", "mobile", "email", "address", "location")),
+        ("admission", ("join", "enroll", "enrol", "register", "admission", "sign up")),
+        ("company_courses", ("what do you offer", "which courses", "what courses", "courses available")),
+    )
 
     def __init__(self, llm: BaseLLM | None):
         self.llm = llm
@@ -57,42 +59,53 @@ class SemanticConversationService:
 
     def fallback(self, message: str, conversation_context: str = "") -> SemanticConversation:
         normalized = self._normalize(message)
-        intent = "general"
-        for candidate, markers in self.FALLBACK_INTENT_MARKERS.items():
-            if any(marker in normalized for marker in markers):
-                intent = candidate
-                break
+        intent = self._detect_fallback_intent(normalized)
         subject = self._fallback_subject(message)
-        questions = [{"text": part.strip(), "intent": intent, "subject": subject} for part in self._split_questions(message) if part.strip()]
+        questions = []
+        for part in self._split_questions(message):
+            part_intent = self._detect_fallback_intent(self._normalize(part))
+            part_subject = self._fallback_subject(part) or subject
+            questions.append({"text": part.strip(), "intent": part_intent, "subject": part_subject})
         if not questions:
             questions = [{"text": message.strip(), "intent": intent, "subject": subject}]
         response_style = "medium" if len(questions) > 1 or intent in {"topics", "details", "duration_and_timings"} else "short"
-        requires_knowledge = intent not in {"general", "lead"}
+        requires_knowledge = intent not in {"general", "lead", "unknown"}
         wants_lead_action = intent == "lead" or any(token in normalized for token in ("contact me", "call me", "book", "register", "sign me up"))
-        return SemanticConversation(intent, subject, questions, response_style, requires_knowledge, wants_lead_action)
+        return SemanticConversation(intent, subject, questions[:6], response_style, requires_knowledge, wants_lead_action)
+
+    def _detect_fallback_intent(self, normalized: str) -> str:
+        for candidate, markers in self.FALLBACK_MARKERS:
+            for marker in markers:
+                if " " in marker:
+                    if marker in normalized:
+                        return candidate
+                elif marker in normalized.split():
+                    return candidate
+        if any(phrase in normalized for phrase in ("which courses", "what courses", "what do you offer")):
+            return "company_courses"
+        return "general"
 
     def _build_prompt(self, message: str, context: str, available_subjects: list[str]) -> str:
         subjects = ", ".join(dict.fromkeys(s.strip() for s in available_subjects if s.strip()))[:1500]
         return f"""
 You are the semantic conversation router for an AI receptionist.
-Understand the customer's meaning, not exact keywords.
-Normalize minor spelling mistakes and colloquial phrasing.
-Use the conversation context to resolve missing subjects such as 'what's the fee?' after a Java discussion.
-Detect every independent question in a multi-question message.
-Never invent a company fact. This output only classifies the request and identifies what knowledge should be retrieved.
+Understand meaning, not exact keywords.
+Correct obvious spelling mistakes and colloquial language internally.
+Use conversation context to resolve references such as "whats the fee?" after a Java discussion.
+Identify every independent request in one customer message.
+Choose a known knowledge subject when it matches the user's wording approximately.
+Never invent company facts; this output only determines routing and retrieval.
 
 Allowed intents: {', '.join(sorted(self.ALLOWED_INTENTS))}
-
 Known knowledge subjects/titles:
 {subjects or '(unknown)'}
 
 Conversation context:
 {context or '(none)'}
-
 Customer message:
 {message}
 
-Return JSON only with this exact shape:
+Return JSON only:
 {{
   "intent": "one allowed intent",
   "subject": "course/product/service subject or null",
@@ -151,9 +164,8 @@ Return JSON only with this exact shape:
     @classmethod
     def _fallback_subject(cls, message: str) -> str | None:
         normalized = cls._normalize(message)
-        normalized = re.sub(r"^(?:what|what's|whats|which|can|could|would|do|does|did|is|are|please|tell me)\b\s*", "", normalized)
         patterns = (
-            r"(?:fee|fees|price|pricing|cost|tuition|duration|timings?|schedule|topics?|syllabus|curriculum|mode|certificate)\s+(?:for|of)\s+(.+)",
+            r"(?:fee|fees|price|pricing|cost|tuition|duration|timings?|schedule|topics?|syllabus|curriculum|mode|certificate|payment)\s+(?:for|of)\s+([a-z][a-z0-9+# ._-]{1,80})$",
             r"(?:for|about)\s+([a-z][a-z0-9+# ._-]{1,80})$",
         )
         for pattern in patterns:
@@ -164,8 +176,16 @@ Return JSON only with this exact shape:
 
     @staticmethod
     def _split_questions(message: str) -> list[str]:
-        text = (message or "").replace("?", "?\n")
-        return [chunk.strip() for chunk in text.splitlines() if chunk.strip()]
+        normalized = (message or "").strip()
+        if not normalized:
+            return []
+        pieces = re.split(r"\?(?:\s+|$)", normalized)
+        results = [piece.strip() + "?" for piece in pieces[:-1] if piece.strip()]
+        remainder = pieces[-1].strip()
+        if remainder:
+            chunks = re.split(r"\s+(?=(?:what|whats|what's|which|how|can|could|would|is|are|do|does|will|where|when|who|why)\b)", remainder, flags=re.IGNORECASE)
+            results.extend(chunk.strip() for chunk in chunks if chunk.strip())
+        return results
 
     @staticmethod
     def _normalize(value: str) -> str:

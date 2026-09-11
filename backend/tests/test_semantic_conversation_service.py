@@ -13,7 +13,8 @@ class FakeLLM:
         return json.dumps(self.payload)
 
 
-def test_semantic_analysis_normalizes_intent_and_subject():
+@pytest.mark.asyncio
+async def test_semantic_analysis_normalizes_intent_and_subject():
     service = SemanticConversationService(
         FakeLLM(
             {
@@ -28,7 +29,12 @@ def test_semantic_analysis_normalizes_intent_and_subject():
             }
         )
     )
-    result = pytest.run(async_fn=service.analyze, message="Whats the fee for java?", conversation_context="", available_subjects=["Java Programming"])
+    result = await service.analyze(
+        message="Whats the fee for java?",
+        conversation_context="",
+        available_subjects=["Java Programming"],
+    )
+    assert result is not None
     assert result.intent == "fee"
     assert result.subject == "Java Programming"
 

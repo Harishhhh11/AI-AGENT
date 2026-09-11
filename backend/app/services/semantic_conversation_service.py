@@ -58,7 +58,7 @@ class SemanticConversationService:
         ("fee", ("fee", "fees", "price", "pricing", "cost", "tuition")),
         ("topics", ("topic", "topics", "syllabus", "curriculum", "covered", "cover", "content")),
         ("eligibility", ("eligible", "eligibility", "requirements", "qualification", "who can join")),
-        ("mode", ("online", "offline", "classroom", "remote", "virtual", "join online", "attend online")),
+        ("mode", ("online", "offline", "classroom", "remote", "virtual", "join online", "attend online", "attend remotely", "remote classes")),
         ("contact", ("contact", "phone", "mobile", "email", "address", "location")),
         ("admission", ("join", "enroll", "enrol", "register", "admission", "sign up")),
         ("company_courses", ("what do you offer", "which courses", "what courses", "courses available")),
@@ -97,6 +97,9 @@ class SemanticConversationService:
         for part in parts[:8]:
             canonical = self._canonicalize(part)
             intent = self._detect_fallback_intent(canonical)
+            high_confidence = self._high_confidence_intent(part)
+            if high_confidence:
+                intent = high_confidence
             subject = self._fallback_subject(canonical, available) or previous_subject
             questions.append({"text": part.strip(), "intent": intent, "subject": subject})
         first = questions[0] if questions else {"intent": "general", "subject": previous_subject}
@@ -212,7 +215,7 @@ Return JSON only:
             ("certificate", ("certificate", "certification", "completion certificate")),
             ("payment", ("payment method", "pay online", "installment", "installments")),
             ("eligibility", ("who can join", "eligibility", "requirements", "qualification")),
-            ("mode", ("can i join online", "can i attend online", "join online", "attend online", "online classes", "online course", "online", "offline", "classroom", "remote", "virtual")),
+            ("mode", ("can i join online", "can i attend online", "join online", "attend online", "attend remotely", "can i attend remotely", "remote classes", "online classes", "online course", "online", "offline", "classroom", "remote", "virtual")),
             ("contact", ("contact", "phone", "mobile", "email", "address", "location")),
             ("company_courses", ("what do you offer", "which courses", "what courses", "courses available")),
         )

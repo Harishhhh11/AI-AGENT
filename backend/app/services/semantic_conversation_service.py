@@ -258,15 +258,19 @@ Return JSON:
         text = (message or "").strip()
         if not text:
             return []
-        pieces = [p.strip() for p in re.split(r"\?(?:\s+|$)", text) if p.strip()]
-        if len(pieces) > 1:
-            return [p + "?" for p in pieces]
+        # Question marks are authoritative boundaries when present.
+        if "?" in text:
+            pieces = [p.strip() for p in re.split(r"\?(?:\s+|$)", text) if p.strip()]
+            return [p + "?" for p in pieces] if pieces else [text]
+        # Never split a single sentence/question merely because it begins with a
+        # common interrogative word. Only split at explicit connectors that introduce
+        # another interrogative clause.
         parts = re.split(
-            r"\s+(?=(?:what|what's|whats|which|how|can|could|would|is|are|do|does|will|where|when|who|why)\b)",
+            r"\s+(?=(?:and|also|plus)\s+(?:what|what's|whats|which|how|can|could|would|is|are|do|does|will|where|when|who|why)\b)",
             text,
             flags=re.IGNORECASE,
         )
-        return [p.strip() for p in parts if p.strip()]
+        return [p.strip() for p in parts if p.strip()] or [text]
 
     @classmethod
     def _canonicalize(cls, value: str) -> str:

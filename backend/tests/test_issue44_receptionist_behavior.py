@@ -74,7 +74,7 @@ def test_timing_fact_answer_preserves_schedule():
         subject="python",
         response_style="short",
     )
-    assert result == "Python: Monday to Friday 10:00 AM to 11:00 AM IST"
+    assert result == "Python: Monday to Friday 10:00 AM to 11:00 AM IST."
 
 
 def test_company_course_catalog_is_not_a_document_dump():

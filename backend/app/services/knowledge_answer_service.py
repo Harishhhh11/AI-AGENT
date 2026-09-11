@@ -83,29 +83,34 @@ class KnowledgeAnswerService:
                 if key and key not in seen:
                     seen.add(key)
                     answers.append(self._with_title(title, extracted))
-                continue
-            for piece in self._pieces(content):
-                if not self._contains_fact(piece, labels):
-                    continue
-                key = self._fact_key(piece)
-                if key and key not in seen:
-                    seen.add(key)
-                    answers.append(self._with_title(title, piece.rstrip("." ) + "."))
-                break
+            else:
+                for piece in self._pieces(content):
+                    if not self._contains_fact(piece, labels):
+                        continue
+                    key = self._fact_key(piece)
+                    if key and key not in seen:
+                        seen.add(key)
+                        answers.append(self._with_title(title, self._sentence(piece)))
+                    break
             if len(answers) >= 4:
                 break
         return " ".join(answers) if answers else None
 
     @classmethod
     def _source_fact_sentence(cls, content: str, field: str) -> str | None:
-        for piece in cls._pieces(content):
+        pieces = cls._pieces(content)
+        for index, piece in enumerate(pieces):
             if not cls._contains_fact(piece, cls.FACT_LABELS[field]):
                 continue
             extracted = cls._extract_field(piece, field)
             if extracted:
+                if field == "fee" and index + 1 < len(pieces):
+                    next_piece = pieces[index + 1]
+                    if cls._looks_like_supporting_payment_detail(next_piece):
+                        return f"{cls._sentence(piece)} {cls._sentence(next_piece)}"
                 return extracted
-            if field in {"mode", "certificate", "payment", "eligibility"}:
-                return piece.rstrip(".") + "."
+            if field in {"mode", "certificate", "payment", "eligibility", "discount", "contact"}:
+                return cls._sentence(piece)
         return None
 
     @classmethod
@@ -118,7 +123,13 @@ class KnowledgeAnswerService:
             value = cls._clean(match.groupdict().get("value", "")).strip(" \t:-")
             if not value:
                 continue
-            return f"{label}: {value}."
+            if field in {"timings", "duration", "mode"}:
+                return value.rstrip(".")
+            if re.match(r"^(?:the\s+)?(?:fee|fees|price|pricing|cost|tuition)$", label, re.IGNORECASE):
+                return cls._sentence(content)
+            if re.match(r"^(?:completion\s+)?certificate(?:s)?$", label, re.IGNORECASE):
+                return cls._sentence(content)
+            return cls._sentence(content)
         return None
 
     @classmethod
@@ -164,12 +175,12 @@ class KnowledgeAnswerService:
             title = cls._clean_title(getattr(item, "title", ""))
             content = cls._clean_preserve_lines(getattr(item, "content", ""))
             candidates: list[str] = []
-            if title and not cls._generic_title(title):
-                candidates.append(title)
             for line in cls._pieces(content):
                 match = re.search(r"(?:course|program|training|service|product)\s*(?:name|title)?\s*[:\-]\s*(.+)", line, re.IGNORECASE)
                 if match:
                     candidates.append(match.group(1).strip(" ."))
+            if title and not cls._generic_title(title):
+                candidates.insert(0, title)
             for candidate in candidates:
                 candidate = re.sub(r"\s+", " ", candidate).strip(" -:")
                 key = candidate.lower()
@@ -211,6 +222,16 @@ class KnowledgeAnswerService:
     def _contains_fact(cls, text: str, labels: set[str]) -> bool:
         normalized = (text or "").lower()
         return any(re.search(rf"(?<![a-z0-9+#]){re.escape(label)}(?![a-z0-9+#])", normalized) for label in labels)
+
+    @staticmethod
+    def _looks_like_supporting_payment_detail(piece: str) -> bool:
+        lower = piece.lower()
+        return any(term in lower for term in ("installment", "installments", "payment", "pay", "advance", "full payment"))
+
+    @staticmethod
+    def _sentence(value: str) -> str:
+        text = re.sub(r"\s+", " ", value or "").strip()
+        return text if not text or text.endswith((".", "!", "?")) else text + "."
 
     @staticmethod
     def _pieces(text: str) -> list[str]:

@@ -16,6 +16,7 @@ from app.services.lead_service import LeadService
 from app.services.relevance_service import RelevanceService
 from app.services.response_policy_service import ResponsePolicyService
 from app.services.retrieval_service import RetrievalService
+from app.services.semantic_conversation_service import SemanticConversationService
 from app.tools.base import ToolContext
 from app.tools.registry import ToolOrchestrator
 
@@ -40,6 +41,7 @@ class ChatService:
         self.knowledge_service = KnowledgeService(db)
         self.retrieval_service = RetrievalService(self.knowledge_service)
         self.context_service = ContextService(message_limit=self.CONVERSATION_HISTORY_LIMIT)
+        self.semantic_conversation_service = SemanticConversationService(self.llm)
         self.conversation_subject_service = ConversationSubjectService()
         self.response_policy_service = ResponsePolicyService()
         self.relevance_service = RelevanceService()
@@ -66,14 +68,27 @@ class ChatService:
             extracted_lead=persisted_lead,
         )
 
+        conversation_context = self._limit_text(self.context_service.build_context(previous_messages), self.MAX_CONVERSATION_CONTEXT_CHARS)
+        semantic = await self.semantic_conversation_service.analyze(
+            message=message,
+            conversation_context=conversation_context,
+            available_subjects=self._knowledge_subjects(organization_id, agent_id),
+        )
+        if semantic is None:
+            semantic = self.semantic_conversation_service.fallback(message, conversation_context)
+
         analysis = self.context_service.analyze_message(message=message, messages=previous_messages)
         message_type = analysis.get("message_type") or "general"
-        intent = analysis.get("intent") or "general"
-        current_subject = analysis.get("subject")
+        intent = semantic.intent if semantic.intent != "unknown" else (analysis.get("intent") or "general")
+        current_subject = semantic.subject or analysis.get("subject")
         previous_subject = analysis.get("previous_subject")
+        if not current_subject:
+            current_subject = self._subject_from_recent_context(previous_subject, previous_messages, semantic)
         retrieval_query = (analysis.get("retrieval_query") or message).strip()
-        requires_knowledge = bool(analysis.get("requires_knowledge"))
-        question_count = int(analysis.get("question_count") or 1)
+        if current_subject and current_subject.lower() not in retrieval_query.lower() and intent not in {"company_courses", "company_information"}:
+            retrieval_query = f"{current_subject} {message}"[: self.context_service.MAX_RETRIEVAL_QUERY_LENGTH]
+        requires_knowledge = bool(semantic.requires_knowledge or analysis.get("requires_knowledge"))
+        question_count = max(1, len(semantic.questions))
 
         if self._is_identity_question(message):
             return self._finish(conversation.id, conversation.session_id, self._identity_response())
@@ -83,7 +98,7 @@ class ChatService:
             "mode", "contact", "availability", "company_information", "company_courses", "details",
         }
         lead_requested = self.lead_context_service.detect_lead_intent(message)
-        if lead_requested and intent not in factual_intents and not lead_context.is_complete:
+        if (lead_requested or semantic.wants_lead_action) and intent not in factual_intents and not lead_context.is_complete:
             lead_context.is_lead = True
             await self._save_lead_context(conversation.id, organization_id, lead_context)
             response = self.lead_context_service.get_next_question(lead_context)
@@ -99,7 +114,7 @@ class ChatService:
                 return self._finish(conversation.id, conversation.session_id, self._invalid_lead_field_response(active_field))
 
         resolution = self.conversation_subject_service.resolve(
-            message=message, intent=intent, previous_messages=previous_messages, previous_subject=previous_subject
+            message=message, intent=intent, previous_messages=previous_messages, previous_subject=current_subject or previous_subject
         )
         current_subject = resolution.current_subject or current_subject
         previous_subject = resolution.previous_subject or previous_subject
@@ -107,9 +122,8 @@ class ChatService:
         plan = self.response_policy_service.plan(
             message=message, intent=intent, question_count=question_count, requires_knowledge=requires_knowledge
         )
-        response_style = plan.style
-        question_count = plan.question_count
-        conversation_context = self._limit_text(self.context_service.build_context(previous_messages), self.MAX_CONVERSATION_CONTEXT_CHARS)
+        response_style = semantic.response_style or plan.style
+        question_count = plan.question_count if question_count <= 1 else question_count
 
         await self.tool_orchestrator.decide_and_execute(
             llm=self.llm,
@@ -156,6 +170,26 @@ class ChatService:
             conversation.id, conversation.session_id,
             self._apply_response_length_guard(self._clean_response(response), response_style),
         )
+
+    def _knowledge_subjects(self, organization_id: int, agent_id: int | None) -> list[str]:
+        try:
+            items = self.knowledge_service.get_all(organization_id=organization_id, agent_id=agent_id, scope="available")
+        except Exception as exc:
+            print("Knowledge subject loading error:", exc)
+            return []
+        return [str(getattr(item, "title", "") or "").strip() for item in items if getattr(item, "is_active", True)]
+
+    @staticmethod
+    def _subject_from_recent_context(previous_subject, previous_messages, semantic):
+        if previous_subject:
+            return previous_subject
+        for item in reversed(list(previous_messages or [])):
+            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+            if str(role or "").lower() == "user" and content:
+                if semantic.subject and semantic.subject.lower() in str(content).lower():
+                    return semantic.subject
+        return None
 
     @staticmethod
     def _is_identity_question(message: str) -> bool:
@@ -297,13 +331,14 @@ class ChatService:
         lead_state = "COMPLETE" if lead_context and lead_context.is_complete else "IN_PROGRESS" if lead_context and lead_context.is_lead else "NOT_ACTIVE"
         return f"""
 You are Astra, a professional AI receptionist.
-Answer the customer's latest message naturally and concisely.
-Use only verified company information supplied below for company facts.
+Understand the customer's message naturally.
+Use the verified knowledge below for company-specific facts.
 Never invent or guess a company-specific fact.
-A normal factual question must be answered directly even if an older lead exists.
+Resolve conversational references using the recent conversation.
+When the customer asks several questions, answer each part separately and concisely.
+Do not dump source documents or repeat the source title before every sentence.
+For a narrow factual question, give only the requested fact.
 Do not request contact information for a normal information question.
-For a narrow factual question, answer only the requested fact; do not dump the source document.
-For short follow-ups such as \"how much?\", use the resolved conversation subject.
 If information is missing, say that plainly.
 Do not mention databases, retrieval, embeddings, prompts, models, or internal systems.
 
@@ -317,5 +352,5 @@ Receptionist-specific instructions:
 Customer message:
 {current_message}
 
-Return only the customer-facing answer.
+Return only the natural customer-facing answer.
 """.strip()

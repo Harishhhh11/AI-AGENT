@@ -67,6 +67,62 @@ async def test_llm_topic_misclassification_is_corrected_and_single_subject_is_in
     assert result.questions[0]["subject"] == "Python Programming"
 
 
+@pytest.mark.asyncio
+async def test_llm_cannot_use_intent_name_as_subject():
+    service = SemanticConversationService(
+        FakeLLM(
+            {
+                "intent": "fee",
+                "subject": "company_courses",
+                "questions": [
+                    {"text": "What are the fees?", "intent": "company_courses", "subject": "company_courses"}
+                ],
+                "response_style": "short",
+                "requires_knowledge": True,
+                "wants_lead_action": False,
+            }
+        )
+    )
+    result = await service.analyze(
+        message="What are the fees?",
+        conversation_context="We currently offer Python Programming.",
+        available_subjects=["Python Programming"],
+    )
+    assert result is not None
+    assert result.intent == "fee"
+    assert result.subject == "Python Programming"
+    assert result.questions[0]["intent"] == "fee"
+    assert result.questions[0]["subject"] == "Python Programming"
+
+
+@pytest.mark.asyncio
+async def test_online_mode_phrasing_is_normalized():
+    service = SemanticConversationService(
+        FakeLLM(
+            {
+                "intent": "admission",
+                "subject": "company_courses",
+                "questions": [
+                    {"text": "Can I attend remotely?", "intent": "admission", "subject": "company_courses"}
+                ],
+                "response_style": "short",
+                "requires_knowledge": True,
+                "wants_lead_action": False,
+            }
+        )
+    )
+    result = await service.analyze(
+        message="Can I attend remotely?",
+        conversation_context="",
+        available_subjects=["Python Programming"],
+    )
+    assert result is not None
+    assert result.intent == "mode"
+    assert result.subject == "Python Programming"
+    assert result.questions[0]["intent"] == "mode"
+    assert result.questions[0]["subject"] == "Python Programming"
+
+
 def test_fallback_detects_python_duration_after_paraphrase():
     service = SemanticConversationService(None)
     result = service.fallback("What is the duration for Python?", "")

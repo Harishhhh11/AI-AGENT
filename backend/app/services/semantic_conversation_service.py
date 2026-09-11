@@ -33,6 +33,10 @@ class SemanticConversationService:
         "company_information", "details", "availability", "certificate", "payment",
         "eligibility", "lead", "unknown", "multi_part",
     }
+    INVALID_SUBJECT_VALUES = ALLOWED_INTENTS | {
+        "null", "none", "unknown", "n/a", "general information", "company",
+        "company information", "company courses", "course information", "course details",
+    }
 
     INTENT_HINTS = {
         "fee": "price, fee, cost, tuition, payment amount",
@@ -125,6 +129,7 @@ Rules:
 - Detect every independent request in a mixed message.
 - Match the subject to the nearest available knowledge subject when appropriate.
 - If there is exactly one available knowledge subject and the user asks a factual question without naming a subject, use that subject.
+- A subject MUST be a real knowledge subject such as "Python Programming", never an intent label such as "fee", "mode", or "company_courses".
 - Treat "Can I join online?", "Can I attend remotely?", "Do you have online classes?" and equivalent wording as mode/online intent.
 - Treat "What topics are covered?" as topics intent even when the model might otherwise select company_courses.
 - Never invent company facts or decide permissions, tenant identity, agent identity, lead state or database authority.
@@ -180,6 +185,12 @@ Return JSON only:
 
         if not questions:
             questions = [{"text": message.strip(), "intent": intent, "subject": subject}]
+
+        # Ollama is allowed to decompose true multi-intent messages, but it must
+        # not turn one ordinary question into several synthetic requests.
+        if len(questions) == 1:
+            questions[0]["intent"] = high_confidence_intent or questions[0]["intent"] or intent
+            questions[0]["subject"] = self._canonical_subject(questions[0].get("subject"), available_subjects) or subject
         if len(questions) > 1:
             intent = "multi_part"
 
@@ -305,12 +316,13 @@ Return JSON only:
         normalized = " ".join(words)
         return normalized.replace("what is is", "what is")
 
-    @staticmethod
-    def _clean_subject(value) -> str | None:
+    @classmethod
+    def _clean_subject(cls, value) -> str | None:
         if value is None:
             return None
         text = re.sub(r"\s+", " ", str(value).strip(" \t\n\r\"'"))
-        if not text or text.lower() in {"null", "none", "unknown", "n/a"}:
+        normalized = text.lower()
+        if not text or normalized in cls.INVALID_SUBJECT_VALUES:
             return None
         return text[:120]
 

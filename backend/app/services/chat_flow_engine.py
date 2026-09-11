@@ -6,7 +6,7 @@ from app.services.semantic_conversation_service import SemanticConversationServi
 
 
 class ChatFlowEngine:
-    """Orchestrates semantic analysis, independent retrieval, grounding and synthesis."""
+    """Orchestrates semantic analysis, strict scoped retrieval, grounding and synthesis."""
 
     MAX_QUESTIONS = 8
     RETRIEVAL_LIMIT = 4
@@ -21,7 +21,13 @@ class ChatFlowEngine:
         self.knowledge_service = knowledge_service
 
     async def run(self, *, message, conversation_context, organization_id, agent_id, previous_subject=None):
-        available_subjects = self._subjects(organization_id, agent_id)
+        available_items = self._available_items(organization_id, agent_id)
+        available_subjects = list(dict.fromkeys(
+            str(getattr(item, "title", "") or "").strip()
+            for item in available_items
+            if getattr(item, "is_active", True) and str(getattr(item, "title", "") or "").strip()
+        ))
+
         semantic = await self.semantic.analyze(
             message=message,
             conversation_context=conversation_context,
@@ -34,8 +40,11 @@ class ChatFlowEngine:
                 available_subjects=available_subjects,
             )
 
-        # Apply conversation subject only when the current semantic turn did not
-        # identify a more specific subject. Never override an explicit subject.
+        # A receptionist with no assigned/shared knowledge must never answer
+        # company-specific factual questions from unrelated/default data.
+        if semantic.requires_knowledge and not available_items:
+            return semantic, [], []
+
         if previous_subject:
             questions = [
                 {**question, "subject": question.get("subject") or previous_subject}
@@ -56,8 +65,6 @@ class ChatFlowEngine:
             original_message=message,
         )[: self.MAX_QUESTIONS]
 
-        # General conversation does not need retrieval. This keeps normal chat
-        # fast while factual turns stay grounded in verified knowledge.
         if not semantic.requires_knowledge:
             return semantic, queries, []
 
@@ -80,8 +87,6 @@ class ChatFlowEngine:
                 if decision.accepted:
                     knowledge.append(result)
 
-        # Preserve the strongest occurrence of each knowledge row and keep the
-        # prompt bounded even for many-question turns.
         deduped = []
         seen = set()
         for item in knowledge:
@@ -96,17 +101,14 @@ class ChatFlowEngine:
                 break
         return semantic, queries, deduped
 
-    def _subjects(self, organization_id, agent_id):
+    def _available_items(self, organization_id, agent_id):
+        if agent_id is None:
+            return []
         try:
-            items = self.knowledge_service.get_all(
+            return self.knowledge_service.get_all(
                 organization_id=organization_id,
                 agent_id=agent_id,
                 scope="available",
             )
         except Exception:
             return []
-        return list(dict.fromkeys(
-            str(getattr(item, "title", "") or "").strip()
-            for item in items
-            if getattr(item, "is_active", True) and str(getattr(item, "title", "") or "").strip()
-        ))

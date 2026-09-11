@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from app.llm.base_llm import BaseLLM
 from app.services.knowledge_answer_service import KnowledgeAnswerService
 from app.services.semantic_conversation_service import SemanticConversation
 
 
-@dataclass(frozen=True)
-class AnswerPart:
-    text: str
-    intent: str
-    subject: str | None
-
-
 class AnswerOrchestrator:
-    """Compose multi-question answers from already scoped verified knowledge."""
+    """Compose grounded answers from independently retrieved verified evidence."""
+
+    MAX_QUESTIONS = 8
+    MAX_ITEMS = 8
+    MAX_ITEM_CHARS = 2200
 
     def __init__(self, llm: BaseLLM | None, fact_service: KnowledgeAnswerService) -> None:
         self.llm = llm
@@ -30,7 +25,14 @@ class AnswerOrchestrator:
         scoped_items: list[object],
         response_style: str,
     ) -> str | None:
-        questions = semantic.questions or [{"text": original_message, "intent": semantic.intent, "subject": semantic.subject}]
+        questions = (semantic.questions or [{
+            "text": original_message,
+            "intent": semantic.intent,
+            "subject": semantic.subject,
+        }])[: self.MAX_QUESTIONS]
+
+        # Exact verified facts should bypass synthesis whenever there is only one
+        # independent request. This is both faster and less hallucination-prone.
         if len(questions) == 1:
             question = questions[0]
             deterministic = self.fact_service.answer(
@@ -44,6 +46,7 @@ class AnswerOrchestrator:
 
         if not self.llm or not scoped_items:
             return None
+
         return await self._synthesize(
             questions=questions,
             original_message=original_message,
@@ -56,25 +59,26 @@ class AnswerOrchestrator:
         knowledge = self._build_knowledge(items)
         prompt = f"""
 You are the final answer writer for a production AI receptionist.
-Answer naturally and directly. The customer may ask several questions.
+Understand the customer's message naturally, but treat VERIFIED KNOWLEDGE as the only authority for company-specific facts.
 
 Hard rules:
-- Use ONLY facts present in VERIFIED KNOWLEDGE below.
-- Never invent, infer, estimate, or fill missing company-specific information.
-- Answer every independent customer question when its evidence is present.
-- If one requested fact is unavailable, say that fact is not available instead of guessing.
-- Keep the answer concise and conversational.
-- Do not repeat document titles for every sentence.
-- Do not dump the source document.
-- Do not mention RAG, embeddings, retrieval, databases, Ollama, prompts, or internal systems.
-- Preserve the subject for each fact (for example Java fee vs Python timings).
+- Use ONLY facts explicitly supported by VERIFIED KNOWLEDGE.
+- Never invent, infer, estimate, or silently combine unrelated facts.
+- Answer every independent request that has evidence.
+- For an unavailable request, explicitly say that the requested information is not available.
+- Preserve the correct subject for every fact, especially when Java and Python are both mentioned.
+- Prefer a natural conversational answer over document-like formatting.
+- Do not dump source documents or repeat long passages.
+- Do not mention RAG, embeddings, retrieval, database, Ollama, prompts, or internal systems.
+- Do not claim an action was performed unless the application already performed it.
+- Keep within the requested response style.
 
 Response style: {response_style}
 
 Customer message:
 {original_message}
 
-Conversation context:
+Recent conversation:
 {conversation_context or '(none)'}
 
 Independent requests:
@@ -100,12 +104,13 @@ Return only the customer-facing answer.
             )
         return "\n".join(lines)
 
-    @staticmethod
-    def _build_knowledge(items: list[object]) -> str:
+    def _build_knowledge(self, items: list[object]) -> str:
         blocks = []
-        for item in items[:8]:
+        for item in items[: self.MAX_ITEMS]:
             title = str(getattr(item, "title", "") or "").strip()
             content = str(getattr(item, "content", "") or "").strip()
-            if content:
-                blocks.append(f"SOURCE: {title}\n{content}" if title else content)
+            if not content:
+                continue
+            content = content[: self.MAX_ITEM_CHARS]
+            blocks.append(f"SOURCE: {title}\n{content}" if title else content)
         return "\n\n".join(blocks)

@@ -220,14 +220,25 @@ class KnowledgeService:
     def _semantic_search(self, organization_id: int, agent_id: int | None, query: str, limit: int) -> list[KnowledgeBase]:
         try:
             query_embedding = self.embedding_service.generate(query)
+            distance_expression = KnowledgeBase.embedding.cosine_distance(query_embedding)
         except Exception as exc:
             print("Embedding generation error:", exc)
             return []
-        distance = KnowledgeBase.embedding.cosine_distance(query_embedding)
-        statement = select(KnowledgeBase, distance.label("similarity_distance")).where(KnowledgeBase.organization_id == organization_id, KnowledgeBase.is_active.is_(True), KnowledgeBase.embedding.is_not(None))
+
+        # SQLite local development does not implement PostgreSQL/pgvector's <=>
+        # cosine-distance operator. Let lexical/scoped retrieval handle SQLite and
+        # use vector search only when the active dialect supports it.
+        if self.db.bind is None or self.db.bind.dialect.name != "postgresql":
+            return []
+
+        statement = select(KnowledgeBase, distance_expression.label("similarity_distance")).where(
+            KnowledgeBase.organization_id == organization_id,
+            KnowledgeBase.is_active.is_(True),
+            KnowledgeBase.embedding.is_not(None),
+        )
         if agent_id is not None:
             statement = statement.where(or_(KnowledgeBase.agent_id.is_(None), KnowledgeBase.agent_id == agent_id))
-        statement = statement.order_by(distance.asc()).limit(limit)
+        statement = statement.order_by(distance_expression.asc()).limit(limit)
         try:
             rows = self.db.execute(statement).all()
         except Exception as exc:

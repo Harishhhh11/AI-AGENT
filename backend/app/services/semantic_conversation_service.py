@@ -65,19 +65,10 @@ class SemanticConversationService:
     )
 
     COMMON_TYPO_NORMALIZATIONS = {
-        "whats": "what is",
-        "whts": "what is",
-        "wats": "what is",
-        "hows": "how is",
-        "complition": "completion",
-        "certifcate": "certificate",
-        "certification": "certificate",
-        "timng": "timing",
-        "timngs": "timings",
-        "duraton": "duration",
-        "durration": "duration",
-        "pythonning": "python",
-        "feeing": "fee",
+        "whats": "what is", "whts": "what is", "wats": "what is", "hows": "how is",
+        "complition": "completion", "certifcate": "certificate", "certification": "certificate",
+        "timng": "timing", "timngs": "timings", "duraton": "duration", "durration": "duration",
+        "pythonning": "python", "feeing": "fee",
     }
 
     def __init__(self, llm: BaseLLM | None):
@@ -130,6 +121,7 @@ Rules:
 - Resolve follow-ups from the conversation, e.g. after Java discussion, "whats the fee?" means Java fee.
 - Detect every independent request in a mixed message.
 - Match the customer's subject to the closest known knowledge subject when appropriate.
+- If exactly one known knowledge subject is available and the customer asks a knowledge question without naming another subject, use that subject.
 - Do not invent company facts.
 - Never decide tenant identity, permissions, agent authorization, database identity, or lead-state authority.
 - Return only the requested JSON structure.
@@ -163,6 +155,9 @@ Return JSON:
         intent = str(data.get("intent") or "unknown").strip().lower()
         if intent not in self.ALLOWED_INTENTS:
             intent = "unknown"
+        high_confidence_intent = self._high_confidence_intent(message)
+        if high_confidence_intent:
+            intent = high_confidence_intent
         subject = self._canonical_subject(data.get("subject"), available_subjects)
         questions: list[dict] = []
         raw_questions = data.get("questions")
@@ -174,6 +169,9 @@ Return JSON:
                 q_intent = str(item.get("intent") or intent).strip().lower()
                 if q_intent not in self.ALLOWED_INTENTS:
                     q_intent = intent
+                question_confidence = self._high_confidence_intent(text)
+                if question_confidence:
+                    q_intent = question_confidence
                 q_subject = self._canonical_subject(item.get("subject"), available_subjects) or subject
                 if text:
                     questions.append({"text": text, "intent": q_intent, "subject": q_subject})
@@ -181,9 +179,18 @@ Return JSON:
             questions = [{"text": message.strip(), "intent": intent, "subject": subject}]
         if len(questions) > 1 and intent not in {"multi_part", "unknown"}:
             intent = "multi_part"
+        # With one active knowledge subject, a factual turn has an unambiguous
+        # subject even when the model omits it for a generic follow-up.
+        if not subject and len(available_subjects) == 1 and any(q["intent"] not in {"general", "lead", "unknown"} for q in questions):
+            subject = str(available_subjects[0]).strip()
+        for question in questions:
+            if not question.get("subject") and subject:
+                question["subject"] = subject
         style = str(data.get("response_style") or "short").lower()
         if style not in {"short", "medium", "long"}:
             style = "medium" if len(questions) > 1 else "short"
+        if intent in {"topics", "details", "duration_and_timings", "company_courses", "availability"}:
+            style = "medium" if style == "short" else style
         requires_knowledge = bool(data.get("requires_knowledge")) or any(
             q["intent"] not in {"general", "lead", "unknown"} for q in questions
         )
@@ -195,6 +202,29 @@ Return JSON:
             requires_knowledge=requires_knowledge,
             wants_lead_action=bool(data.get("wants_lead_action")),
         )
+
+    @classmethod
+    def _high_confidence_intent(cls, message: str) -> str | None:
+        """Correct only unmistakable intent phrases after Ollama analysis."""
+        normalized = cls._canonicalize(message)
+        if not normalized:
+            return None
+        checks = (
+            ("topics", ("what topics", "which topics", "topics covered", "what is covered", "what are covered", "syllabus", "curriculum")),
+            ("duration", ("how long", "duration", "course length", "how many months", "how many weeks")),
+            ("timings", ("timings", "timing", "batch timing", "batch timings", "class time", "schedule")),
+            ("fee", ("fee", "fees", "price", "pricing", "cost", "tuition")),
+            ("certificate", ("certificate", "certification", "completion certificate")),
+            ("payment", ("payment method", "pay online", "pay", "installment", "installments")),
+            ("eligibility", ("who can join", "eligibility", "requirements", "qualification")),
+            ("mode", ("online", "offline", "classroom", "remote", "virtual")),
+            ("contact", ("contact", "phone", "mobile", "email", "address", "location")),
+            ("company_courses", ("what do you offer", "which courses", "what courses", "courses available")),
+        )
+        for intent, markers in checks:
+            if any((marker in normalized) if " " in marker else (marker in normalized.split()) for marker in markers):
+                return intent
+        return None
 
     @classmethod
     def _canonical_subject(cls, value, available_subjects: list[str]) -> str | None:
@@ -258,13 +288,9 @@ Return JSON:
         text = (message or "").strip()
         if not text:
             return []
-        # Question marks are authoritative boundaries when present.
         if "?" in text:
             pieces = [p.strip() for p in re.split(r"\?(?:\s+|$)", text) if p.strip()]
             return [p + "?" for p in pieces] if pieces else [text]
-        # Never split a single sentence/question merely because it begins with a
-        # common interrogative word. Only split at explicit connectors that introduce
-        # another interrogative clause.
         parts = re.split(
             r"\s+(?=(?:and|also|plus)\s+(?:what|what's|whats|which|how|can|could|would|is|are|do|does|will|where|when|who|why)\b)",
             text,

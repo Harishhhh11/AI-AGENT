@@ -5,11 +5,11 @@ from app.services.semantic_conversation_service import SemanticConversationServi
 
 
 class ChatFlowEngine:
-    """Orchestrates semantic analysis, strict scoped retrieval, grounding and synthesis."""
+    """Orchestrate semantic understanding, scoped retrieval, grounding and answer synthesis."""
 
     MAX_QUESTIONS = 8
-    RETRIEVAL_LIMIT = 4
-    MAX_GROUNDED_ITEMS = 12
+    RETRIEVAL_LIMIT = 6
+    MAX_GROUNDED_ITEMS = 16
     KNOWLEDGE_INTENTS = {
         "company_courses", "topics", "fee", "discount", "duration", "timings",
         "duration_and_timings", "mode", "admission", "contact", "company_information",
@@ -26,11 +26,7 @@ class ChatFlowEngine:
 
     async def run(self, *, message, conversation_context, organization_id, agent_id, previous_subject=None):
         available_items = self._available_items(organization_id, agent_id)
-        available_subjects = list(dict.fromkeys(
-            str(getattr(item, "title", "") or "").strip()
-            for item in available_items
-            if str(getattr(item, "title", "") or "").strip()
-        ))
+        available_subjects = self._subjects(available_items)
 
         semantic = await self.semantic.analyze(
             message=message,
@@ -38,81 +34,41 @@ class ChatFlowEngine:
             available_subjects=available_subjects,
         )
         if semantic is None:
-            semantic = self.semantic.fallback(
-                message,
-                conversation_context,
-                available_subjects=available_subjects,
-            )
-
-        # A receptionist with no active assigned/shared knowledge must never
-        # answer company-specific factual questions from another scope.
-        if semantic.requires_knowledge and not available_items:
-            return semantic, [], []
+            semantic = self.semantic.fallback(message, conversation_context, available_subjects=available_subjects)
 
         if previous_subject:
-            questions = [
-                {**question, "subject": question.get("subject") or previous_subject}
-                for question in semantic.questions
-            ]
-            semantic = semantic.__class__(
-                intent=semantic.intent,
-                subject=semantic.subject or previous_subject,
-                questions=questions,
-                response_style=semantic.response_style,
-                requires_knowledge=semantic.requires_knowledge,
-                wants_lead_action=semantic.wants_lead_action,
-            )
+            semantic = self._apply_previous_subject(semantic, previous_subject)
+
+        if semantic.requires_knowledge and not available_items:
+            return semantic, [], []
 
         queries = self.queries.build_queries(
             semantic=semantic,
             fallback_subject=previous_subject,
             original_message=message,
         )[: self.MAX_QUESTIONS]
-
         if not semantic.requires_knowledge:
             return semantic, queries, []
 
         knowledge = []
         for query_plan in queries:
+            scoped_subject = query_plan.get("subject") or semantic.subject or previous_subject
             results = self.retrieval.retrieve(
                 organization_id=organization_id,
                 query=query_plan["query"],
                 limit=self.RETRIEVAL_LIMIT,
-                subject=query_plan.get("subject"),
+                subject=scoped_subject,
                 agent_id=agent_id,
             )
-            accepted_for_query = []
-            for result in results:
-                decision = self.grounding.evaluate(
-                    query=query_plan["query"],
-                    title=str(getattr(result, "title", "") or ""),
-                    content=str(getattr(result, "content", "") or ""),
-                    semantic_distance=getattr(result, "semantic_distance", None),
-                )
-                if decision.accepted:
-                    accepted_for_query.append(result)
-
-            # Retrieval relevance is a ranking signal, not permission to discard
-            # the only knowledge document assigned to a receptionist. Natural
-            # questions such as "what are the fees?" or "can I join online?"
-            # often contain intent words that do not literally occur in the
-            # source document. Ollama must see the scoped source and decide from
-            # its actual content rather than receiving an artificial "no data".
-            if not accepted_for_query and query_plan.get("intent") in self.KNOWLEDGE_INTENTS:
-                accepted_for_query = self._scoped_fallback(
-                    available_items,
-                    subject=query_plan.get("subject"),
-                    limit=self.RETRIEVAL_LIMIT,
-                )
-
-            knowledge.extend(accepted_for_query)
+            accepted = self._ground(query_plan, results)
+            if not accepted and query_plan.get("intent") in self.KNOWLEDGE_INTENTS:
+                accepted = self._scoped_fallback(available_items, scoped_subject, self.RETRIEVAL_LIMIT)
+            knowledge.extend(accepted)
 
         deduped = []
         seen = set()
         for item in knowledge:
-            key = getattr(item, "id", None)
-            if key is None:
-                key = (getattr(item, "title", ""), getattr(item, "content", ""))
+            key = getattr(item, "id", None) or (getattr(item, "title", ""), getattr(item, "content", ""))
             if key in seen:
                 continue
             seen.add(key)
@@ -121,14 +77,33 @@ class ChatFlowEngine:
                 break
         return semantic, queries, deduped
 
+    def _ground(self, query_plan, results):
+        accepted = []
+        for result in results or []:
+            decision = self.grounding.evaluate(
+                query=query_plan["query"],
+                title=str(getattr(result, "title", "") or ""),
+                content=str(getattr(result, "content", "") or ""),
+                semantic_distance=getattr(result, "semantic_distance", None),
+            )
+            if decision.accepted:
+                accepted.append(result)
+        return accepted
+
     @staticmethod
-    def _scoped_fallback(items, subject: str | None, limit: int):
+    def _scoped_fallback(items, subject, limit):
         candidates = list(items or [])
         if subject:
             from app.services.conversation_guard import ConversationGuard
             matched = [item for item in candidates if ConversationGuard.matches_subject(subject, item)]
             if matched:
                 candidates = matched
+            else:
+                # When the receptionist has exactly one scoped document, the document
+                # itself is the authority. Do not throw it away because a query phrase
+                # is semantically unrelated to its title.
+                if len(candidates) > 1:
+                    return []
         return candidates[:limit]
 
     def _available_items(self, organization_id, agent_id):
@@ -143,3 +118,26 @@ class ChatFlowEngine:
             return [item for item in items if getattr(item, "is_active", True)]
         except Exception:
             return []
+
+    @staticmethod
+    def _subjects(items):
+        return list(dict.fromkeys(
+            str(getattr(item, "title", "") or "").strip()
+            for item in items
+            if str(getattr(item, "title", "") or "").strip()
+        ))
+
+    @staticmethod
+    def _apply_previous_subject(semantic, previous_subject):
+        questions = [
+            {**question, "subject": question.get("subject") or previous_subject}
+            for question in semantic.questions
+        ]
+        return semantic.__class__(
+            intent=semantic.intent,
+            subject=semantic.subject or previous_subject,
+            questions=questions,
+            response_style=semantic.response_style,
+            requires_knowledge=semantic.requires_knowledge,
+            wants_lead_action=semantic.wants_lead_action,
+        )

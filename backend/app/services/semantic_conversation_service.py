@@ -25,7 +25,7 @@ class SemanticConversation:
 
 
 class SemanticConversationService:
-    """Fast Ollama-assisted semantic routing with a conservative deterministic fallback."""
+    """Ollama-first semantic routing with conservative deterministic fallback."""
 
     ALLOWED_INTENTS = {
         "general", "company_courses", "topics", "fee", "discount", "duration",
@@ -40,7 +40,7 @@ class SemanticConversationService:
         "duration": "duration, length, months, weeks, days, how long",
         "timings": "timings, schedule, batch, class time, when classes happen",
         "topics": "topics, syllabus, curriculum, what is covered, course content",
-        "mode": "online, offline, classroom, virtual, remote, delivery mode",
+        "mode": "online, offline, classroom, virtual, remote, delivery mode, can I join online",
         "certificate": "certificate, certification, completion certificate",
         "payment": "pay, payment method, installment, installments, advance, full payment",
         "eligibility": "who can join, eligibility, requirements, qualifications",
@@ -58,7 +58,7 @@ class SemanticConversationService:
         ("fee", ("fee", "fees", "price", "pricing", "cost", "tuition")),
         ("topics", ("topic", "topics", "syllabus", "curriculum", "covered", "cover", "content")),
         ("eligibility", ("eligible", "eligibility", "requirements", "qualification", "who can join")),
-        ("mode", ("online", "offline", "classroom", "remote", "virtual")),
+        ("mode", ("online", "offline", "classroom", "remote", "virtual", "join online", "attend online")),
         ("contact", ("contact", "phone", "mobile", "email", "address", "location")),
         ("admission", ("join", "enroll", "enrol", "register", "admission", "sign up")),
         ("company_courses", ("what do you offer", "which courses", "what courses", "courses available")),
@@ -68,7 +68,7 @@ class SemanticConversationService:
         "whats": "what is", "whts": "what is", "wats": "what is", "hows": "how is",
         "complition": "completion", "certifcate": "certificate", "certification": "certificate",
         "timng": "timing", "timngs": "timings", "duraton": "duration", "durration": "duration",
-        "pythonning": "python", "feeing": "fee",
+        "pythonning": "python", "feeing": "fee", "joinning": "joining",
     }
 
     def __init__(self, llm: BaseLLM | None):
@@ -113,24 +113,24 @@ class SemanticConversationService:
         subjects = ", ".join(dict.fromkeys(s.strip() for s in available_subjects if s.strip()))[:2000]
         intent_lines = "\n".join(f"- {name}: {description}" for name, description in self.INTENT_HINTS.items())
         return f"""
-You are the language-understanding engine for a production AI receptionist.
-Your job is to understand what the customer means, not to answer the question.
+You are the semantic understanding engine for a production AI receptionist.
+Understand the customer's meaning; do not answer the customer.
 
 Rules:
-- Interpret spelling mistakes, shorthand, missing apostrophes, colloquial language and paraphrases.
-- Resolve follow-ups from the conversation, e.g. after Java discussion, "whats the fee?" means Java fee.
+- Understand typos, shorthand, missing punctuation, slang, colloquial wording, paraphrases and follow-ups.
+- Resolve references from the recent conversation.
 - Detect every independent request in a mixed message.
-- Match the customer's subject to the closest known knowledge subject when appropriate.
-- If exactly one known knowledge subject is available and the customer asks a knowledge question without naming another subject, use that subject.
-- Do not invent company facts.
-- Never decide tenant identity, permissions, agent authorization, database identity, or lead-state authority.
-- Return only the requested JSON structure.
+- Match the subject to the nearest available knowledge subject when appropriate.
+- If there is exactly one available knowledge subject and the user asks a factual question without naming a subject, use that subject.
+- Treat "Can I join online?", "Can I attend remotely?", "Do you have online classes?" and equivalent wording as mode/online intent.
+- Treat "What topics are covered?" as topics intent even when the model might otherwise select company_courses.
+- Never invent company facts or decide permissions, tenant identity, agent identity, lead state or database authority.
 
 Available intents:
 {intent_lines}
 
-Known knowledge subjects/titles:
-{subjects or "(none provided)"}
+Known knowledge subjects:
+{subjects or "(none)"}
 
 Recent conversation:
 {context or "(none)"}
@@ -138,13 +138,11 @@ Recent conversation:
 Customer message:
 {message}
 
-Return JSON:
+Return JSON only:
 {{
-  "intent": "one allowed intent; use multi_part when there are multiple independent requests",
-  "subject": "best matching known subject or null",
-  "questions": [
-    {{"text": "original sub-question", "intent": "intent", "subject": "subject or null"}}
-  ],
+  "intent": "one allowed intent or multi_part",
+  "subject": "best matching knowledge subject or null",
+  "questions": [{{"text": "original sub-question", "intent": "intent", "subject": "subject or null"}}],
   "response_style": "short|medium|long",
   "requires_knowledge": true,
   "wants_lead_action": false
@@ -158,6 +156,7 @@ Return JSON:
         high_confidence_intent = self._high_confidence_intent(message)
         if high_confidence_intent:
             intent = high_confidence_intent
+
         subject = self._canonical_subject(data.get("subject"), available_subjects)
         questions: list[dict] = []
         raw_questions = data.get("questions")
@@ -175,37 +174,33 @@ Return JSON:
                 q_subject = self._canonical_subject(item.get("subject"), available_subjects) or subject
                 if text:
                     questions.append({"text": text, "intent": q_intent, "subject": q_subject})
+
         if not questions:
             questions = [{"text": message.strip(), "intent": intent, "subject": subject}]
-        if len(questions) > 1 and intent not in {"multi_part", "unknown"}:
+        if len(questions) > 1:
             intent = "multi_part"
-        # With one active knowledge subject, a factual turn has an unambiguous
-        # subject even when the model omits it for a generic follow-up.
-        if not subject and len(available_subjects) == 1 and any(q["intent"] not in {"general", "lead", "unknown"} for q in questions):
+
+        if not subject and len(available_subjects) == 1 and any(
+            q["intent"] not in {"general", "lead", "unknown"} for q in questions
+        ):
             subject = str(available_subjects[0]).strip()
         for question in questions:
             if not question.get("subject") and subject:
                 question["subject"] = subject
+
         style = str(data.get("response_style") or "short").lower()
         if style not in {"short", "medium", "long"}:
             style = "medium" if len(questions) > 1 else "short"
         if intent in {"topics", "details", "duration_and_timings", "company_courses", "availability"}:
             style = "medium" if style == "short" else style
+
         requires_knowledge = bool(data.get("requires_knowledge")) or any(
             q["intent"] not in {"general", "lead", "unknown"} for q in questions
         )
-        return SemanticConversation(
-            intent=intent,
-            subject=subject,
-            questions=questions[:8],
-            response_style=style,
-            requires_knowledge=requires_knowledge,
-            wants_lead_action=bool(data.get("wants_lead_action")),
-        )
+        return SemanticConversation(intent, subject, questions[:8], style, requires_knowledge, bool(data.get("wants_lead_action")))
 
     @classmethod
     def _high_confidence_intent(cls, message: str) -> str | None:
-        """Correct only unmistakable intent phrases after Ollama analysis."""
         normalized = cls._canonicalize(message)
         if not normalized:
             return None
@@ -215,9 +210,9 @@ Return JSON:
             ("timings", ("timings", "timing", "batch timing", "batch timings", "class time", "schedule")),
             ("fee", ("fee", "fees", "price", "pricing", "cost", "tuition")),
             ("certificate", ("certificate", "certification", "completion certificate")),
-            ("payment", ("payment method", "pay online", "pay", "installment", "installments")),
+            ("payment", ("payment method", "pay online", "installment", "installments")),
             ("eligibility", ("who can join", "eligibility", "requirements", "qualification")),
-            ("mode", ("online", "offline", "classroom", "remote", "virtual")),
+            ("mode", ("can i join online", "can i attend online", "join online", "attend online", "online classes", "online course", "online", "offline", "classroom", "remote", "virtual")),
             ("contact", ("contact", "phone", "mobile", "email", "address", "location")),
             ("company_courses", ("what do you offer", "which courses", "what courses", "courses available")),
         )
@@ -264,8 +259,7 @@ Return JSON:
         for pattern in patterns:
             match = re.search(pattern, normalized)
             if match:
-                raw_subject = match.group(1).strip(" ?.!")
-                return cls._canonical_subject(raw_subject, available_subjects)
+                return cls._canonical_subject(match.group(1).strip(" ?.!").rstrip(), available_subjects)
         return None
 
     @classmethod
@@ -274,7 +268,7 @@ Return JSON:
             return "company_courses"
         if any(marker in normalized for marker in ("certificate", "certification", "completion")):
             return "certificate"
-        if any(marker in normalized for marker in ("payment", "pay", "installment", "installments", "advance")):
+        if any(marker in normalized for marker in ("payment method", "pay online", "installment", "installments", "advance")):
             return "payment"
         if any(marker in normalized for marker in ("who can join", "eligibility", "eligible", "requirements", "qualification")):
             return "eligibility"
